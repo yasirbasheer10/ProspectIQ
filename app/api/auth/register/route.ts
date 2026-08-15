@@ -65,6 +65,6 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify({ error: error.issues[0].message }), { status: 400 })
     }
     console.error("Registration error:", error)
-    return new Response(JSON.stringify({ error: "Something went wrong" }), { status: 500 })
+    return new Response(JSON.stringify({ error: `Debug Error: ${error.message || String(error)}` }), { status: 500 })
   }
 }
