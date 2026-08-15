@@ -5,7 +5,8 @@ import { defineConfig } from "prisma/config";
 import * as fs from 'fs';
 import * as path from 'path';
 
-let databaseUrl = process.env.DATABASE_URL;
+let databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL;
+let directUrl = process.env.DIRECT_URL || process.env.POSTGRES_URL_NON_POOLING;
 
 try {
   const envFile = fs.readFileSync(path.join(process.cwd(), '.env'), 'utf8');
@@ -20,7 +21,7 @@ try {
 export default defineConfig({
   schema: "./prisma/schema.prisma",
   datasource: {
-    url: databaseUrl,
-    directUrl: process.env.DIRECT_URL,
+    url: databaseUrl as string,
+    directUrl: directUrl as string,
   },
 });
