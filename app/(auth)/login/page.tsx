@@ -1,15 +1,15 @@
 "use client"
 
-import { useState } from "react"
+import { Suspense, useState } from "react"
 import { signIn } from "next-auth/react"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { Loader2 } from "lucide-react"
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const callbackUrl = searchParams.get("callbackUrl") || "/dashboard" // Will map to your (app) dashboard
+  const callbackUrl = searchParams.get("callbackUrl") || "/dashboard"
   const verified = searchParams.get("verified")
   
   const [email, setEmail] = useState("")
@@ -161,3 +161,12 @@ export default function LoginPage() {
     </div>
   )
 }
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="flex h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-[#0071E3]" /></div>}>
+      <LoginForm />
+    </Suspense>
+  )
+}
+
