@@ -25,7 +25,11 @@ function createPrismaClient(): PrismaClient {
   }
 
   return new PrismaClient({
-    datasourceUrl: url,
+    datasources: {
+      db: {
+        url: url,
+      },
+    },
   });
 }
 
