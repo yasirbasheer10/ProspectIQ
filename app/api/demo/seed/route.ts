@@ -12,10 +12,11 @@ export async function POST() {
 
   try {
     // Dynamic import to avoid Prisma edge runtime issues
-    const { getDemoSession } = await import("@/lib/session");
+    const { getSession } = await import("@/lib/session");
     const { seedDemoData } = await import("@/lib/demo/seed");
 
-    const session = await getDemoSession();
+    const session = await getSession();
+    if (!session?.workspaceId) throw new Error("No session");
     const result = await seedDemoData(session.workspaceId);
 
     return NextResponse.json({

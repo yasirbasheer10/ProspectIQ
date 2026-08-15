@@ -10,10 +10,11 @@ export async function POST() {
   }
 
   try {
-    const { getDemoSession } = await import("@/lib/session");
+    const { getSession } = await import("@/lib/session");
     const { resetDemoData } = await import("@/lib/demo/seed");
 
-    const session = await getDemoSession();
+    const session = await getSession();
+    if (!session?.workspaceId) throw new Error("No session");
     await resetDemoData(session.workspaceId);
 
     return NextResponse.json({
