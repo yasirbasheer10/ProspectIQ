@@ -17,6 +17,16 @@ try {
   // Ignore
 }
 
+if (databaseUrl && !databaseUrl.includes('localhost') && !databaseUrl.includes('127.0.0.1')) {
+  const separator = databaseUrl.includes('?') ? '&' : '?';
+  if (!databaseUrl.includes('pgbouncer=true')) {
+    databaseUrl += `${separator}pgbouncer=true`;
+  }
+  if (!databaseUrl.includes('sslaccept=')) {
+    databaseUrl += `&sslaccept=accept_invalid_certs`;
+  }
+}
+
 export default defineConfig({
   schema: "./prisma/schema.prisma",
   datasource: {

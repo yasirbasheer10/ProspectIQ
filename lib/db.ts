@@ -13,24 +13,7 @@ const globalForPrisma = globalThis as unknown as {
 function createPrismaClient(): PrismaClient {
   let url = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL || "";
   
-  // If production Supabase URL, enforce sslaccept and pgbouncer
-  if (url && !url.includes('localhost') && !url.includes('127.0.0.1')) {
-    const separator = url.includes('?') ? '&' : '?';
-    if (!url.includes('pgbouncer=true')) {
-      url += `${separator}pgbouncer=true`;
-    }
-    if (!url.includes('sslaccept=')) {
-      url += `&sslaccept=accept_invalid_certs`;
-    }
-  }
-
-  return new PrismaClient({
-    datasources: {
-      db: {
-        url: url,
-      },
-    },
-  });
+  return new PrismaClient();
 }
 
 export const prisma =
