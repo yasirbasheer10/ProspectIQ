@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { ai } from "./groq";
 import { performSearch } from "./search";
+import { calculateOpportunityScore, type ScoreInput } from "@/lib/scoring/opportunity-score";
 
 // ─────────────────────────────────────────────────────────────
 // TYPES & SCHEMAS
@@ -30,6 +31,32 @@ const intelligenceSchemaDefinition = `
   "recommended_channel": "Best channel to reach out (e.g., EMAIL, LINKEDIN)",
   "reasoning": "Detailed explanation of the AI's inferences and scores",
   "confidence": 0.9,
+  "scoring_assessment": {
+    "icp_fit": {
+      "score": 75,
+      "reasoning": "Why this company matches or doesn't match the ideal customer profile (industry, size, geography, tech stack)"
+    },
+    "problem_evidence": {
+      "score": 80,
+      "reasoning": "How strong is the evidence that this company has the problems we solve? Cite specific evidence."
+    },
+    "buying_intent": {
+      "score": 60,
+      "reasoning": "Are there signals they are actively looking for a solution? (hiring, RFPs, tech changes, complaints)"
+    },
+    "service_match": {
+      "score": 70,
+      "reasoning": "How well do our specific offers align with their identified needs?"
+    },
+    "buyer_confidence": {
+      "score": 65,
+      "reasoning": "How confident are we in the identified decision maker? Do we have a name, title, contact info?"
+    },
+    "contactability": {
+      "score": 50,
+      "reasoning": "Can we actually reach the buyer? Do we have email, LinkedIn, or phone? Is there a gatekeeper?"
+    }
+  },
   "evidence": [
     {
       "title": "Fact title",
@@ -106,8 +133,9 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
     const text = response.choices[0].message.content.trim();
     const data = JSON.parse(text);
 
-    // 4. Calculate Scores
-    const scores = calculateScores(data);
+    // 4. Calculate Scores using the REAL scoring engine
+    const scoreInput = mapAIOutputToScoreInput(data);
+    const scores = calculateOpportunityScore(scoreInput);
 
     // 5. Store VERIFIED EVIDENCE
     const savedEvidence = [];
@@ -160,12 +188,12 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
         recommendedBuyerRole: data.buyer_role,
         score: {
           create: {
-            icpFitScore: scores.icp,
-            problemEvidenceScore: scores.problem,
-            buyingIntentScore: scores.intent,
-            serviceMatchScore: scores.service,
-            buyerConfidenceScore: scores.buyer,
-            contactabilityScore: scores.contact,
+            icpFitScore: scores.icpFit,
+            problemEvidenceScore: scores.problemEvidence,
+            buyingIntentScore: scores.buyingIntent,
+            serviceMatchScore: scores.serviceMatch,
+            buyerConfidenceScore: scores.buyerConfidence,
+            contactabilityScore: scores.contactability,
             overallScore: scores.overall
           }
         }
@@ -200,7 +228,8 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
         description: data.company_summary,
         status: "RESEARCHED",
         researchedAt: new Date(),
-        researchScore: scores.overall
+        researchScore: scores.overall,
+        scoreGrade: scores.grade
       }
     });
 
@@ -211,7 +240,7 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
         status: "COMPLETED",
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         outputData: { rawOutput: data, scores } as any,
-        resultSummary: `Analyzed with score ${scores.overall}`
+        resultSummary: `Analyzed with score ${scores.overall} (Grade: ${scores.grade}, ${scores.qualifies ? 'QUALIFIED' : 'NOT QUALIFIED'})`
       }
     });
 
@@ -291,29 +320,53 @@ ${intelligenceSchemaDefinition}
   `;
 }
 
+/**
+ * Maps the raw AI output into proper ScoreInput for the real scoring engine.
+ * Each factor is derived from the AI's independent assessment rather than
+ * a single self-reported confidence number.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function calculateScores(data: any) {
-  // Transparent opportunity scoring
-  // ICP fit: 20%, Problem evidence: 25%, Buying intent: 20%, Service match: 15%, Buyer confidence: 10%, Contactability: 10%
-  
-  // Base scores on confidence + presence of data
-  const base = (data.confidence || 0.7) * 100;
-  
-  const icp = Math.min(100, base + 10);
-  const problem = data.problems?.length ? Math.min(100, base + 15) : base - 10;
-  const intent = data.signals?.length > 0 ? Math.min(100, base + 20) : base - 5;
-  const service = data.recommended_offer ? Math.min(100, base + 10) : base - 20;
-  const buyer = data.buyer_role ? Math.min(100, base + 5) : base - 10;
-  const contact = 80; // Placeholder for contactability (would rely on Apollo/Hunter in full pipeline)
+function mapAIOutputToScoreInput(data: any): ScoreInput {
+  const assessment = data.scoring_assessment;
 
-  const overall = Math.round(
-    (icp * 0.20) +
-    (problem * 0.25) +
-    (intent * 0.20) +
-    (service * 0.15) +
-    (buyer * 0.10) +
-    (contact * 0.10)
+  // If the AI returned proper per-factor assessments, use them directly
+  if (assessment && typeof assessment === 'object') {
+    return {
+      icpFit: clampScore(assessment.icp_fit?.score),
+      problemEvidence: clampScore(assessment.problem_evidence?.score),
+      buyingIntent: clampScore(assessment.buying_intent?.score),
+      serviceMatch: clampScore(assessment.service_match?.score),
+      buyerConfidence: clampScore(assessment.buyer_confidence?.score),
+      contactability: clampScore(assessment.contactability?.score),
+    };
+  }
+
+  // Fallback: derive scores from structural evidence in the AI output
+  // This is still better than the old approach because each factor is
+  // independently evaluated based on what the AI actually found
+  const hasProblems = Array.isArray(data.problems) && data.problems.length > 0;
+  const hasSignals = Array.isArray(data.signals) && data.signals.length > 0;
+  const hasEvidence = Array.isArray(data.evidence) && data.evidence.length > 0;
+  const hasDecisionMakers = Array.isArray(data.decision_makers) && data.decision_makers.length > 0;
+  const hasVerifiedContacts = hasDecisionMakers && data.decision_makers.some(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (dm: any) => dm.email || dm.is_verified
   );
 
-  return { icp, problem, intent, service, buyer, contact, overall };
+  return {
+    icpFit: hasEvidence ? 65 + Math.min(25, data.evidence.length * 8) : 40,
+    problemEvidence: hasProblems ? 50 + Math.min(40, data.problems.length * 15) : 20,
+    buyingIntent: hasSignals ? 40 + Math.min(50, data.signals.length * 12) : 15,
+    serviceMatch: data.recommended_offer ? 70 : 30,
+    buyerConfidence: hasDecisionMakers
+      ? 40 + Math.min(50, data.decision_makers.length * 20)
+      : (data.buyer_role ? 35 : 10),
+    contactability: hasVerifiedContacts ? 75 : (hasDecisionMakers ? 45 : 15),
+  };
+}
+
+/** Clamp a score value to 0-100, defaulting to 0 if missing */
+function clampScore(value: unknown): number {
+  const num = typeof value === 'number' ? value : 0;
+  return Math.max(0, Math.min(100, Math.round(num)));
 }

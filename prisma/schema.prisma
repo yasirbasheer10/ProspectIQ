@@ -306,6 +306,7 @@ model Company {
   status          CompanyStatus @default(DISCOVERED)
   researchedAt    DateTime?
   researchScore   Float?        // 0-100 internal quality score
+  scoreGrade      String?       // A, B, C, D, F grade from scoring engine
   
   // Source tracking
   discoverySource String?       // "demo" | "apollo" | "manual" | ...
