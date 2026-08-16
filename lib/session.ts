@@ -23,7 +23,25 @@ export async function getSession() {
     }
   });
 
-  const workspaceId = userWithWorkspaces?.workspaces?.[0]?.workspaceId || "demo";
+  let workspaceId = userWithWorkspaces?.workspaces?.[0]?.workspaceId;
+
+  // Auto-provision a default workspace if they skipped onboarding
+  if (!workspaceId) {
+    const userId = (session.user as any).id;
+    const defaultWorkspace = await prisma.workspace.create({
+      data: {
+        name: "My Workspace",
+        slug: `workspace-${userId}`,
+        members: {
+          create: {
+            userId: userId,
+            role: "owner"
+          }
+        }
+      }
+    });
+    workspaceId = defaultWorkspace.id;
+  }
 
   return {
     ...session,
