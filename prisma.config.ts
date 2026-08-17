@@ -5,19 +5,24 @@ import { defineConfig } from "prisma/config";
 import * as fs from 'fs';
 import * as path from 'path';
 
+const isPushing = process.argv.includes('push') || process.argv.includes('migrate');
 let databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL;
+
+if (isPushing && process.env.POSTGRES_URL_NON_POOLING) {
+  databaseUrl = process.env.POSTGRES_URL_NON_POOLING;
+}
 
 try {
   const envFile = fs.readFileSync(path.join(process.cwd(), '.env'), 'utf8');
   const match = envFile.match(/DATABASE_URL="([^"]+)"/);
-  if (match) {
+  if (match && !databaseUrl) {
     databaseUrl = match[1];
   }
 } catch {
   // Ignore
 }
 
-if (databaseUrl && !databaseUrl.includes('localhost') && !databaseUrl.includes('127.0.0.1')) {
+if (!isPushing && databaseUrl && !databaseUrl.includes('localhost') && !databaseUrl.includes('127.0.0.1')) {
   const separator = databaseUrl.includes('?') ? '&' : '?';
   if (!databaseUrl.includes('pgbouncer=true')) {
     databaseUrl += `${separator}pgbouncer=true`;
