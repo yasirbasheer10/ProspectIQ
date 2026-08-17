@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Topbar } from "@/components/layout/Topbar";
 import { Card } from "@/components/ui/Card";
@@ -33,6 +33,40 @@ export function DiscoveryClient({ icp }: { icp: any }) {
   const [loadingStep, setLoadingStep] = useState(0);
   const [mode, setMode] = useState<"icp" | "manual">("icp");
   const [customDomainsText, setCustomDomainsText] = useState("");
+  
+  const [runIdToPoll, setRunIdToPoll] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Poll for completion
+  useEffect(() => {
+    if (!runIdToPoll) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const status = await checkRunStatus(runIdToPoll);
+        if (status.status === "COMPLETED" || status.status === "FAILED") {
+          clearInterval(interval);
+          setRunIdToPoll(null);
+          
+          if (status.status === "FAILED") {
+            setIsScanning(false);
+            setErrorMsg("Discovery run failed. Please try again.");
+          } else {
+            setLoadingStep(4); // 4: Done
+            setTimeout(() => {
+              router.push("/companies");
+            }, 500);
+          }
+        } else if (status.status === "RUNNING") {
+          setLoadingStep(3); // 3: Scraping & Analyzing Pages
+        }
+      } catch (err) {
+        console.error("Polling error:", err);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [runIdToPoll, router]);
   
   // Geography State
   const [geoSearch, setGeoSearch] = useState("");
@@ -97,6 +131,7 @@ export function DiscoveryClient({ icp }: { icp: any }) {
   };
 
   const handleScan = async () => {
+    setErrorMsg(null);
     setIsScanning(true);
     setLoadingStep(1); // 1: Initializing
     try {
@@ -117,24 +152,13 @@ export function DiscoveryClient({ icp }: { icp: any }) {
       setLoadingStep(2); // 2: Searching Web / Extracting Domains
       
       if (res && res.runId) {
-        // Poll for completion
-        const interval = setInterval(async () => {
-          const status = await checkRunStatus(res.runId);
-          if (status.status === "COMPLETED" || status.status === "FAILED") {
-            clearInterval(interval);
-            setLoadingStep(4); // 4: Done
-            setTimeout(() => {
-              router.push("/companies");
-            }, 500);
-          } else if (status.status === "RUNNING") {
-             setLoadingStep(3); // 3: Scraping & Analyzing Pages
-          }
-        }, 2000);
+        setRunIdToPoll(res.runId);
       }
       
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
       setIsScanning(false);
+      setErrorMsg(e?.message || "An unexpected error occurred while starting discovery.");
     }
   };
 
@@ -145,6 +169,13 @@ export function DiscoveryClient({ icp }: { icp: any }) {
       <main className="flex-1 overflow-y-auto p-8 relative">
         <div className="mx-auto max-w-4xl mt-0">
           
+          {errorMsg && (
+            <div className="mb-6 rounded-xl bg-[#FF3B30]/10 p-4 border border-[#FF3B30]/20 flex items-start gap-3 text-[#FF3B30]">
+              <X className="shrink-0 mt-0.5" size={18} />
+              <p className="text-[14px] font-medium leading-tight">{errorMsg}</p>
+            </div>
+          )}
+
           <div className="flex items-center justify-between mb-5">
             <div>
               <h2 className="text-3xl font-medium tracking-tight text-[#1D1D1F] mb-1.5">Who should we find?</h2>

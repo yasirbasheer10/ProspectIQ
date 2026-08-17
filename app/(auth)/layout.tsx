@@ -1,5 +1,6 @@
 import { Inter } from "next/font/google"
 import "@/app/globals.css"
+import Image from "next/image"
 import Link from "next/link"
 
 const inter = Inter({ subsets: ["latin"] })
@@ -14,10 +15,13 @@ export default function AuthLayout({
       {/* Simple Header */}
       <header className="w-full flex justify-center py-8">
         <Link href="/">
-          <img 
+          <Image 
             src="/landing-page/assets/prospectiq-logo.png" 
             alt="ProspectIQ" 
-            className="h-8 object-contain"
+            width={160}
+            height={32}
+            className="h-8 w-auto object-contain"
+            priority
           />
         </Link>
       </header>

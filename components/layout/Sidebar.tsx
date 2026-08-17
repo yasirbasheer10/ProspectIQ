@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
@@ -46,11 +47,13 @@ export function Sidebar() {
       {/* Header / Logo */}
       <div className="px-6 pt-6 pb-2">
         <div className="mb-4 flex items-center">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img 
+          <Image 
             src="/ProspectIQ .png" 
             alt="ProspectIQ Logo" 
+            width={110}
+            height={24}
             className="w-[110px] h-auto object-contain ml-3"
+            priority
           />
         </div>
       </div>

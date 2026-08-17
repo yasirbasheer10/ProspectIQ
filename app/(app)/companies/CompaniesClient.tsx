@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect } from "react";
 import { Topbar } from "@/components/layout/Topbar";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge, CompanyStatusBadge } from "@/components/ui/Badge";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { Filter, Search, Globe, Users, ArrowRight, Trash2, Loader2, CheckSquare } from "lucide-react";
+import { Filter, Search, Globe, Users, ArrowRight, Trash2, Loader2, CheckSquare, ChevronLeft, ChevronRight } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { deleteCompany, bulkDeleteCompanies } from "./actions";
+import { useListState } from "@/hooks/useListState";
 
 function ScoreDot({ score }: { score: number | null }) {
   if (score === null) return <span className="text-[#86868B] text-[13px]">—</span>;
@@ -23,24 +24,53 @@ function ScoreDot({ score }: { score: number | null }) {
 interface CompaniesClientProps {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
   companies: any[];
+  totalItems: number;
+  totalPages: number;
+  currentPage: number;
+  searchQueryParam: string;
 }
 
-export function CompaniesClient({ companies }: CompaniesClientProps) {
+export function CompaniesClient({ companies, totalItems, totalPages, currentPage, searchQueryParam }: CompaniesClientProps) {
   const router = useRouter();
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(searchQueryParam);
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isPending, startTransition] = useTransition();
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  
-  // Bulk selection state
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
-  const filteredCompanies = companies.filter(c => 
-    c.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    c.domain.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.industry?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const {
+    selectedIds,
+    isBulkDeleting,
+    setIsBulkDeleting,
+    deletingId,
+    setDeletingId,
+    toggleSelectAll,
+    toggleSelectRow,
+    clearSelection,
+    removeDeletedId,
+  } = useListState(companies);
+
+  // Debounced search pushing to URL
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (searchQuery !== searchQueryParam) {
+        startTransition(() => {
+          const params = new URLSearchParams();
+          if (searchQuery) params.set("q", searchQuery);
+          // Reset page to 1 when search changes
+          router.push(`/companies?${params.toString()}`);
+        });
+      }
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [searchQuery, searchQueryParam, router]);
+
+  const goToPage = (p: number) => {
+    startTransition(() => {
+      const params = new URLSearchParams();
+      if (searchQuery) params.set("q", searchQuery);
+      if (p > 1) params.set("page", p.toString());
+      router.push(`/companies?${params.toString()}`);
+    });
+  };
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation(); // prevent row click
@@ -50,33 +80,9 @@ export function CompaniesClient({ companies }: CompaniesClientProps) {
     startTransition(async () => {
       await deleteCompany(id);
       setDeletingId(null);
-      
-      // Remove from selection if deleted
-      if (selectedIds.has(id)) {
-        const next = new Set(selectedIds);
-        next.delete(id);
-        setSelectedIds(next);
-      }
+      removeDeletedId(id);
+      router.refresh();
     });
-  };
-
-  const toggleSelectAll = () => {
-    if (selectedIds.size === filteredCompanies.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(filteredCompanies.map(c => c.id)));
-    }
-  };
-
-  const toggleSelectRow = (e: React.MouseEvent | React.ChangeEvent, id: string) => {
-    e.stopPropagation();
-    const next = new Set(selectedIds);
-    if (next.has(id)) {
-      next.delete(id);
-    } else {
-      next.add(id);
-    }
-    setSelectedIds(next);
   };
 
   const handleBulkDelete = async () => {
@@ -85,8 +91,9 @@ export function CompaniesClient({ companies }: CompaniesClientProps) {
     setIsBulkDeleting(true);
     startTransition(async () => {
       await bulkDeleteCompanies(Array.from(selectedIds));
-      setSelectedIds(new Set());
+      clearSelection();
       setIsBulkDeleting(false);
+      router.refresh();
     });
   };
 
@@ -94,7 +101,7 @@ export function CompaniesClient({ companies }: CompaniesClientProps) {
     <div className="flex h-full flex-col bg-white">
       <Topbar
         title="Companies"
-        subtitle={`${filteredCompanies.length} companies tracked`}
+        subtitle={`${totalItems} companies tracked`}
         actions={
           <div className="flex items-center gap-3">
             {selectedIds.size > 0 && (
@@ -115,7 +122,7 @@ export function CompaniesClient({ companies }: CompaniesClientProps) {
       />
 
       <main className="flex-1 overflow-y-auto p-8 bg-[#F5F5F7]">
-        <div className="mx-auto max-w-6xl">
+        <div className="mx-auto max-w-6xl flex flex-col min-h-full">
           {/* Search bar */}
           <div className="mb-6 relative">
             <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#86868B]" />
@@ -129,7 +136,7 @@ export function CompaniesClient({ companies }: CompaniesClientProps) {
           </div>
 
           {/* Table */}
-          <Card className="overflow-hidden">
+          <Card className="overflow-hidden mb-4 flex-1">
             <table className="data-table w-full text-left">
               <thead className="bg-[#F5F5F7]">
                 <tr>
@@ -137,7 +144,7 @@ export function CompaniesClient({ companies }: CompaniesClientProps) {
                     <input 
                       type="checkbox"
                       className="w-4 h-4 rounded border-[#E5E5EA] text-[#0071E3] focus:ring-[#0071E3] cursor-pointer"
-                      checked={filteredCompanies.length > 0 && selectedIds.size === filteredCompanies.length}
+                      checked={companies.length > 0 && selectedIds.size === companies.length}
                       onChange={toggleSelectAll}
                     />
                   </th>
@@ -152,7 +159,7 @@ export function CompaniesClient({ companies }: CompaniesClientProps) {
                 </tr>
               </thead>
               <tbody className="bg-white">
-                {filteredCompanies.length > 0 ? filteredCompanies.map((company) => {
+                {companies.length > 0 ? companies.map((company) => {
                   const scoreObj = company.opportunities?.[0]?.score;
                   const mockScore = scoreObj ? scoreObj.overallScore : (company.status === "DISCOVERED" || company.status === "RESEARCHING" ? null : 70 + (company.name.length % 25));
                   const mockSignals = company._count?.signals ?? (company.status === "DISCOVERED" ? 0 : 1 + (company.name.length % 3));
@@ -237,6 +244,38 @@ export function CompaniesClient({ companies }: CompaniesClientProps) {
               </tbody>
             </table>
           </Card>
+
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between pb-8">
+              <span className="text-[14px] text-[#86868B]">
+                Showing {((currentPage - 1) * 50) + 1} - {Math.min(currentPage * 50, totalItems)} of {totalItems}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button 
+                  variant="secondary" 
+                  size="sm" 
+                  icon={ChevronLeft} 
+                  disabled={currentPage === 1 || isPending}
+                  onClick={() => goToPage(currentPage - 1)}
+                >
+                  Previous
+                </Button>
+                <div className="text-[14px] font-medium text-[#1D1D1F] px-2">
+                  Page {currentPage} of {totalPages}
+                </div>
+                <Button 
+                  variant="secondary" 
+                  size="sm" 
+                  disabled={currentPage === totalPages || isPending}
+                  onClick={() => goToPage(currentPage + 1)}
+                >
+                  Next <ChevronRight size={16} className="ml-2" />
+                </Button>
+              </div>
+            </div>
+          )}
+
         </div>
       </main>
     </div>

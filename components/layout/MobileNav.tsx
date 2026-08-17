@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { Menu, X, LayoutDashboard, Telescope, Building2, Lightbulb, Users, Send, GitBranch, MessageSquare, BarChart3, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -27,8 +28,13 @@ export function MobileNav() {
     <div className="md:hidden">
       {/* Top Bar */}
       <div className="flex h-14 items-center justify-between bg-white px-4 border-b border-[#E5E5EA]">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/ProspectIQ .png" alt="ProspectIQ Logo" className="h-6 object-contain" />
+        <Image 
+          src="/ProspectIQ .png" 
+          alt="ProspectIQ Logo" 
+          width={120}
+          height={24}
+          className="h-6 w-auto object-contain" 
+        />
         <button onClick={() => setIsOpen(!isOpen)} className="p-2 -mr-2 text-gray-600 hover:text-black">
           {isOpen ? <X size={24} /> : <Menu size={24} />}
         </button>

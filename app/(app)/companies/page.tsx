@@ -2,24 +2,60 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/session";
 import { CompaniesClient } from "./CompaniesClient";
 
-export default async function CompaniesPage() {
+export default async function CompaniesPage({
+  searchParams,
+}: {
+  searchParams: { q?: string; page?: string };
+}) {
   const session = await getSession();
   const workspaceId = session?.workspaceId || "demo";
 
-  const companies = await prisma.company.findMany({
-    where: { workspaceId },
-    include: {
-      opportunities: {
-        include: {
-          score: true,
+  const q = searchParams?.q || "";
+  const page = parseInt(searchParams?.page || "1");
+  const pageSize = 50;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const whereClause: any = {
+    workspaceId,
+  };
+
+  if (q) {
+    whereClause.OR = [
+      { name: { contains: q, mode: "insensitive" } },
+      { domain: { contains: q, mode: "insensitive" } },
+      { industry: { contains: q, mode: "insensitive" } },
+    ];
+  }
+
+  const [companies, totalItems] = await Promise.all([
+    prisma.company.findMany({
+      where: whereClause,
+      include: {
+        opportunities: {
+          include: {
+            score: true,
+          },
+        },
+        _count: {
+          select: { signals: true },
         },
       },
-      _count: {
-        select: { signals: true }
-      }
-    },
-    orderBy: { createdAt: 'desc' }
-  });
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    prisma.company.count({ where: whereClause }),
+  ]);
 
-  return <CompaniesClient companies={companies} />;
+  const totalPages = Math.ceil(totalItems / pageSize);
+
+  return (
+    <CompaniesClient 
+      companies={companies} 
+      totalItems={totalItems} 
+      totalPages={totalPages} 
+      currentPage={page} 
+      searchQueryParam={q}
+    />
+  );
 }
