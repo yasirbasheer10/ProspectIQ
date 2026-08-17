@@ -80,15 +80,32 @@ You must return valid JSON matching this schema exactly:
 ${outreachSchemaDefinition}
 `;
 
-    // Attempt generation with strict JSON schema
-    const response = await ai.chat.completions.create({
-      model: "llama-3.1-8b-instant",
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" },
-      temperature: 0.7,
-    });
+    // Retry logic (up to 3 attempts with exponential backoff)
+    let response;
+    let retries = 0;
+    const maxRetries = 3;
+    
+    while (retries < maxRetries) {
+      try {
+        response = await ai.chat.completions.create({
+          model: "llama-3.1-8b-instant",
+          messages: [{ role: "user", content: prompt }],
+          response_format: { type: "json_object" },
+          temperature: 0.7,
+        });
+        break; // Success, exit retry loop
+      } catch (err) {
+        retries++;
+        console.warn(`Outreach generation attempt ${retries} failed:`, err);
+        if (retries >= maxRetries) {
+          throw err;
+        }
+        // Wait before retrying: 1s, then 2s
+        await new Promise(resolve => setTimeout(resolve, retries * 1000));
+      }
+    }
 
-    const text = response.choices[0].message.content;
+    const text = response?.choices[0].message.content;
     if (!text) throw new Error("Empty response from AI");
     
     const data = JSON.parse(text);
@@ -129,22 +146,26 @@ ${outreachSchemaDefinition}
     return message;
 
   } catch (error: unknown) {
-    console.error("Outreach Generation Error:", error);
+    console.error("Outreach Generation Error (Exhausted retries):", error);
     await prisma.agentRun.update({
       where: { id: run.id },
       data: { status: "FAILED", errorMessage: error instanceof Error ? error.message : String(error) }
     });
     
-    // Fallback if API fails
-    return await fallbackToDemoOutreach(opportunityId, contactId, company, opportunity, contact, existingMessageId);
+    // Provide a safe, honest template instead of a hallucination
+    return await fallbackToSafeTemplate(opportunityId, contactId, company, opportunity, contact, existingMessageId);
   }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fallbackToDemoOutreach(opportunityId: string, contactId: string, company: any, opportunity: any, contact: any, existingMessageId?: string) {
-  const subject = `Reducing friction in ${company.name}'s checkout flow`;
-  const body = `Hi ${contact.firstName || contact.fullName?.split(" ")[0]},\n\nI noticed ${company.name} recently expanded into European markets and is rapidly scaling the team—great initiative.\n\nTypically, when E-commerce companies of your scale make these changes, they face hidden friction points that impact conversion rates. We specialize in identifying and resolving these precise bottlenecks through ${opportunity.recommendedService || "automation"}.\n\nWould you be open to a quick 10-minute chat next Tuesday to share how we helped a similar brand increase their checkout completion by 14%?\n\nBest,\nYasir`;
+async function fallbackToSafeTemplate(opportunityId: string, contactId: string, company: any, opportunity: any, contact: any, existingMessageId?: string) {
+  const firstName = contact.firstName || contact.fullName?.split(" ")[0] || "there";
+  const service = opportunity.recommendedService || "our solutions";
   
+  const subject = `Partnership opportunity with ${company.name}`;
+  const body = `Hi ${firstName},\n\nI noticed ${company.name} recently [Insert observation about their recent growth, news, or pain point].\n\nTypically, when companies like yours experience this, they face challenges with [Insert typical problem related to observation]. We specialize in identifying and resolving these exact bottlenecks through ${service}.\n\nWould you be open to a brief overview of a proposed approach tailored to your team?\n\nBest,\nYasir`;
+  
+  const personalizationNotes = "⚠️ AI Generation Failed. This is a generic safe template. Please manually replace the [Bracketed] placeholders before sending.";
   const evidenceUsedIds = company.evidence?.[0] ? [company.evidence[0].id] : [];
   
   if (existingMessageId) {
@@ -153,7 +174,7 @@ async function fallbackToDemoOutreach(opportunityId: string, contactId: string, 
       data: {
         subject,
         body,
-        personalizationNotes: "[DEMO] Referenced recent European expansion news.",
+        personalizationNotes,
         evidenceUsed: evidenceUsedIds,
         status: "DRAFT"
       }
@@ -165,7 +186,7 @@ async function fallbackToDemoOutreach(opportunityId: string, contactId: string, 
         contactId,
         subject,
         body,
-        personalizationNotes: "[DEMO] Referenced recent European expansion news.",
+        personalizationNotes,
         evidenceUsed: evidenceUsedIds,
         status: "DRAFT",
         channel: "EMAIL"
