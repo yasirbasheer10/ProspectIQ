@@ -37,13 +37,37 @@ export function DiscoveryClient({ icp }: { icp: any }) {
   const [runIdToPoll, setRunIdToPoll] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Poll for completion
+  // Poll for completion. Guards against two ways this could otherwise spin
+  // forever: (1) checkRunStatus failing repeatedly (session hiccup, network
+  // blip) — we stop after MAX_CONSECUTIVE_FAILURES rather than retrying every
+  // 2s forever, and (2) the run itself never reaching a terminal status server
+  // side — we give up after MAX_POLL_MS total and surface a clear message
+  // either way, instead of leaving the UI silently "scanning" indefinitely.
   useEffect(() => {
     if (!runIdToPoll) return;
 
+    const MAX_CONSECUTIVE_FAILURES = 5;
+    const MAX_POLL_MS = 10 * 60 * 1000; // 10 minutes
+    const startedAt = Date.now();
+    let consecutiveFailures = 0;
+
+    const stopWithError = (message: string) => {
+      clearInterval(interval);
+      setRunIdToPoll(null);
+      setIsScanning(false);
+      setErrorMsg(message);
+    };
+
     const interval = setInterval(async () => {
+      if (Date.now() - startedAt > MAX_POLL_MS) {
+        stopWithError("Discovery is taking much longer than expected. It may still be running in the background — check the Companies list in a few minutes, or try again.");
+        return;
+      }
+
       try {
         const status = await checkRunStatus(runIdToPoll);
+        consecutiveFailures = 0; // reset on any successful check, even if still RUNNING
+
         if (status.status === "COMPLETED" || status.status === "FAILED") {
           clearInterval(interval);
           setRunIdToPoll(null);
@@ -62,6 +86,10 @@ export function DiscoveryClient({ icp }: { icp: any }) {
         }
       } catch (err) {
         console.error("Polling error:", err);
+        consecutiveFailures++;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          stopWithError("Lost connection while checking discovery status. Please check the Companies list, or try again.");
+        }
       }
     }, 2000);
 

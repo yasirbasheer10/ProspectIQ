@@ -80,4 +80,7 @@ export const ai = {
 
 // Export model name constants for easy updates in one place
 export const GEMINI_FLASH = "gemini-3.6-flash";   // Fast: discovery, conversations
-export const GEMINI_PRO   = "gemini-3.1-pro-preview"; // Smart: intelligence, outreach, orchestration
+// NOTE: gemini-3.1-pro-preview has 0 free-tier quota as of 2026 (Pro models require
+// billing enabled). Pointed at Flash until billing is turned on — swap back to
+// "gemini-3.1-pro-preview" then, for higher-quality research/outreach reasoning.
+export const GEMINI_PRO   = "gemini-3.6-flash";

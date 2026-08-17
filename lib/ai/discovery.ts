@@ -49,8 +49,10 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
       data: { totalItems: domainsToScrape.length }
     });
 
-    // 3. Jina AI Reader Scraping & AI Extraction
-    for (const domain of domainsToScrape) {
+    // 3. Jina AI Reader Scraping & AI Extraction — processed in small concurrent
+    //    batches instead of one domain at a time, to cut wall-clock time while
+    //    staying under free-tier per-minute rate limits (Jina + Gemini Flash).
+    const processDomain = async (domain: string) => {
       try {
         await logActivity(workspaceId, "SCRAPE_START", `Analyzing ${domain}`, `Initiating deep-dive research on ${domain}...`);
         
@@ -151,6 +153,14 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
         console.error(`Failed to process domain ${domain}:`, err);
         await logActivity("SCRAPE_FAILED", `Error analyzing ${domain}`, err instanceof Error ? err.message : "Unknown error");
       }
+    };
+
+    // Process in batches of 3 concurrently — enough to meaningfully cut total
+    // runtime without bursting past free-tier RPM ceilings on Jina/Gemini.
+    const BATCH_SIZE = 3;
+    for (let i = 0; i < domainsToScrape.length; i += BATCH_SIZE) {
+      const batch = domainsToScrape.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map(processDomain));
     }
 
     // 6. Complete Run
@@ -264,16 +274,42 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
       if (dbIcp.companySize) size = `Company Size: ${dbIcp.companySize} employees`;
     }
 
-    // 1. Search Google via Serper to find target companies
-    const query = `Top ${industries} companies in ${regions} ${size}`;
-    const searchData = await performSearch(query);
-    let searchContext = "";
-    if (searchData && searchData.organic) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      searchContext = searchData.organic.map((res: any) => `Title: ${res.title}\nLink: ${res.link}\nSnippet: ${res.snippet}`).join('\n\n');
+    // 1. Search Google via Serper — multiple signal-based queries instead of one
+    //    "Top X companies" query. "Top/Best" phrasing reliably surfaces listicle
+    //    articles (G2, Forbes, Capterra roundups) dominated by famous category
+    //    leaders, not real prospectable mid-market companies. Querying on real
+    //    buying-signal language instead (hiring, funding, launching) surfaces a
+    //    wider, less-famous, more relevant candidate pool — and running several
+    //    query angles instead of one also gives the extraction step a bigger
+    //    pool of distinct domains to choose from.
+    const queryAngles = [
+      `"${industries}" companies hiring ${regions} ${size} -"top 10" -"best"`,
+      `"${industries}" startups ${regions} funding OR "series a" OR "series b" ${size}`,
+      `"${industries}" company directory OR "companies list" ${regions} ${size}`,
+    ];
+
+    const searchResults = await Promise.all(queryAngles.map(q => performSearch(q).catch(() => null)));
+
+    // Merge + dedupe organic results across all query angles by link
+    const seenLinks = new Set<string>();
+    const mergedResults: { title: string; link: string; snippet: string }[] = [];
+    for (const searchData of searchResults) {
+      if (searchData && searchData.organic) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const res of searchData.organic as any[]) {
+          if (res.link && !seenLinks.has(res.link)) {
+            seenLinks.add(res.link);
+            mergedResults.push(res);
+          }
+        }
+      }
     }
 
-    const prompt = `You are a B2B lead generation researcher. Review the following Google Search results to find up to 15 real, active company websites that exactly match this Ideal Customer Profile.
+    const searchContext = mergedResults
+      .map(res => `Title: ${res.title}\nLink: ${res.link}\nSnippet: ${res.snippet}`)
+      .join('\n\n');
+
+    const prompt = `You are a B2B lead generation researcher. Review the following Google Search results to find up to 25 real, active company websites that exactly match this Ideal Customer Profile. Prefer specific, real companies over famous household names — avoid companies that only appear because they were mentioned in a "best of" or "top X" listicle rather than because they genuinely match the ICP.
     
     ICP Config:
     Industries: ${industries}
@@ -284,9 +320,10 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
     ${searchContext}
 
     Requirements:
-    1. Extract up to 15 root domains (e.g. stripe.com) from the search results that fit the ICP.
+    1. Extract up to 25 root domains (e.g. stripe.com) from the search results that fit the ICP.
     2. Do NOT make them up. They must be present in the search context.
-    3. You must return valid JSON matching this schema exactly:
+    3. Prefer smaller and mid-sized real companies over famous market leaders — if a domain only appears because it was in a "best of" or ranking-style article rather than a genuine ICP match, skip it.
+    4. You must return valid JSON matching this schema exactly:
     ${domainsSchemaDefinition}
     `;
 
