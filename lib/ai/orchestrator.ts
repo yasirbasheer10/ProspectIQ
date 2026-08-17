@@ -126,7 +126,7 @@ async function orchestratorLoop(runId: string, workspaceId: string) {
           let reactOutput;
           try {
             const response = await ai.chat.completions.create({
-              model: "llama-3.1-8b-instant",
+              model: "groq/compound-mini",
               messages: [{ role: "user", content: prompt }],
               response_format: { type: "json_object" }
             });
