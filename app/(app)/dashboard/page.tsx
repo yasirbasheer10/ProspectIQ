@@ -169,7 +169,7 @@ export default async function DashboardPage() {
                       {signal.description}
                     </p>
                     <div className="flex items-center gap-3 mt-2.5">
-                      <span className="text-[11px] font-medium text-[#6E6E73]">{signal.company.name}</span>
+                      <span className="text-[11px] font-medium text-[#6E6E73]">{signal.company?.name || "Unknown Company"}</span>
                       <Link href={`/companies/${signal.companyId}`} className="text-[12px] font-medium text-[#1D1D1F] border border-[#E5E5EA] rounded-md px-2.5 py-1 hover:bg-[#F5F5F7] transition-colors">
                         View Company
                       </Link>
