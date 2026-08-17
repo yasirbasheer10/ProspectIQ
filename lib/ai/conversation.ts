@@ -1,4 +1,4 @@
-import { ai } from "./groq";
+import { ai } from "./gemini";
 import { prisma } from "../db";
 import { ReplyClassification } from "@prisma/client";
 
@@ -67,7 +67,7 @@ ${conversationSchemaDefinition}
 
   try {
     const response = await ai.chat.completions.create({
-      model: "groq/compound-mini",
+      model: "gemini-3.6-flash",
       messages: [{ role: "user", content: prompt }],
       response_format: { type: "json_object" },
       temperature: 0.3,

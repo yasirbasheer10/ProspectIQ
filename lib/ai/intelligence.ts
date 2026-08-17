@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { ai } from "./groq";
+import { ai } from "./gemini";
 import { performSearch } from "./search";
 import { calculateOpportunityScore, type ScoreInput } from "@/lib/scoring/opportunity-score";
 
@@ -132,7 +132,7 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
     while (retries < maxRetries) {
       try {
         response = await ai.chat.completions.create({
-          model: "groq/compound-mini",
+          model: "gemini-3.1-pro-preview",
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           temperature: 0.2

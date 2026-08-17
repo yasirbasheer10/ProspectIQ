@@ -66,7 +66,7 @@ export async function startOrchestratorRun(workspaceId: string) {
   return run;
 }
 
-import { ai } from "./groq";
+import { ai } from "./gemini";
 
 const reactSchemaDefinition = `
 {
@@ -126,7 +126,7 @@ async function orchestratorLoop(runId: string, workspaceId: string) {
           let reactOutput;
           try {
             const response = await ai.chat.completions.create({
-              model: "groq/compound-mini",
+              model: "gemini-3.1-pro-preview",
               messages: [{ role: "user", content: prompt }],
               response_format: { type: "json_object" }
             });

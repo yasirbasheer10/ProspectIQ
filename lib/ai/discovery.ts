@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { ai } from "./groq";
+import { ai } from "./gemini";
 import * as cheerio from "cheerio";
 import { performSearch } from "./search";
 import { sanitizeText } from "./intelligence";
@@ -224,7 +224,7 @@ async function extractCompanyData(scrapedText: string, sourceUrl: string) {
     while (retries < maxRetries) {
       try {
         response = await ai.chat.completions.create({
-          model: "groq/compound-mini",
+          model: "gemini-3.6-flash",
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           temperature: 0.2
@@ -305,7 +305,7 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
     while (retries < maxRetries) {
       try {
         response = await ai.chat.completions.create({
-          model: "groq/compound-mini",
+          model: "gemini-3.6-flash",
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           temperature: 0.2

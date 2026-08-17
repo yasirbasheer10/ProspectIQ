@@ -1,5 +1,5 @@
 import { prisma } from "../db";
-import { ai } from "./groq";
+import { ai } from "./gemini";
 
 const outreachSchemaDefinition = `
 {
@@ -88,7 +88,7 @@ ${outreachSchemaDefinition}
     while (retries < maxRetries) {
       try {
         response = await ai.chat.completions.create({
-          model: "groq/compound-mini",
+          model: "gemini-3.1-pro-preview",
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           temperature: 0.7,
