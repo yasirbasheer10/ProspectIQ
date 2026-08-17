@@ -238,7 +238,56 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
       }
     }
 
-    // 9. Update Company
+    // 9. Hunter.io Contact Enrichment — only for high-scoring leads (score >= 70)
+    //    to preserve the 50 credits/month free tier
+    if (scores.overall >= 70 && company.domain) {
+      try {
+        const hunterKey = process.env.HUNTER_API_KEY;
+        if (hunterKey) {
+          const hunterUrl = `https://api.hunter.io/v2/domain-search?domain=${encodeURIComponent(company.domain)}&api_key=${hunterKey}&limit=5&type=personal`;
+          const hunterRes = await fetch(hunterUrl);
+          if (hunterRes.ok) {
+            const hunterData = await hunterRes.json();
+            const hunterContacts = hunterData?.data?.emails || [];
+            let savedCount = 0;
+
+            for (const contact of hunterContacts) {
+              if (!contact.value || !contact.first_name) continue;
+              // Avoid duplicating contacts already found by AI
+              const existingContact = await prisma.contact.findFirst({
+                where: { companyId, email: contact.value }
+              });
+              if (existingContact) continue;
+
+              await prisma.contact.create({
+                data: {
+                  workspaceId,
+                  companyId,
+                  opportunityId: opportunity.id,
+                  fullName: `${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+                  title: contact.position || contact.department || "Unknown Role",
+                  email: contact.value,
+                  linkedinUrl: contact.linkedin || null,
+                  sourceName: "Hunter.io",
+                  isVerified: contact.verification?.status === "valid",
+                  buyerScore: contact.confidence || null
+                }
+              });
+              savedCount++;
+            }
+
+            if (savedCount > 0) {
+              console.log(`Hunter.io: Saved ${savedCount} real verified contacts for ${company.name}`);
+            }
+          }
+        }
+      } catch (hunterErr) {
+        // Non-fatal: log and continue without crashing the intelligence run
+        console.error("Hunter.io enrichment failed (non-fatal):", hunterErr);
+      }
+    }
+
+    // 10. Update Company
     await prisma.company.update({
       where: { id: companyId },
       data: {

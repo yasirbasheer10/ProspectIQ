@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/db";
 import { ai } from "./gemini";
-import * as cheerio from "cheerio";
 import { performSearch } from "./search";
 import { sanitizeText } from "./intelligence";
 
@@ -50,49 +49,42 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
       data: { totalItems: domainsToScrape.length }
     });
 
-    // 3. Cheerio HTML Scraping & AI Extraction
+    // 3. Jina AI Reader Scraping & AI Extraction
     for (const domain of domainsToScrape) {
       try {
         await logActivity(workspaceId, "SCRAPE_START", `Analyzing ${domain}`, `Initiating deep-dive research on ${domain}...`);
         
         // Ensure https
         const url = domain.startsWith("http") ? domain : `https://${domain}`;
-        
-        let title = "";
-        let metaDesc = "";
-        let bodyText = "";
 
+        // Use Jina AI Reader — handles JS-heavy sites, anti-bot, returns clean Markdown
+        let combinedText = "";
         try {
-          // Timeout 10 seconds to avoid blocking forever
+          const jinaKey = process.env.JINA_API_KEY;
+          const jinaUrl = `https://r.jina.ai/${url}`;
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 10000);
-          
-          const response = await fetch(url, {
+          const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+          const jinaResponse = await fetch(jinaUrl, {
             signal: controller.signal,
             headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+              'Authorization': jinaKey ? `Bearer ${jinaKey}` : '',
+              'Accept': 'text/plain',
+              'X-Return-Format': 'markdown',
             }
           });
           clearTimeout(timeoutId);
-          
-          if (response.ok) {
-            const html = await response.text();
-            const $ = cheerio.load(html);
-            
-            title = $('title').text() || "";
-            metaDesc = $('meta[name="description"]').attr('content') || "";
-            
-            // Remove unnecessary tags
-            $('script, style, noscript, iframe, img, svg, nav, footer, header').remove();
-            
-            // Get clean body text limit to 10k chars
-            bodyText = $('body').text().replace(/\s+/g, ' ').trim().substring(0, 10000);
+
+          if (jinaResponse.ok) {
+            const markdown = await jinaResponse.text();
+            // Cap at 15k chars — Gemini can handle far more but we keep prompts focused
+            combinedText = sanitizeText(markdown).substring(0, 15000);
+          } else {
+            console.warn(`Jina failed for ${url}: ${jinaResponse.status}`);
           }
         } catch (e) {
-          console.error(`Failed to fetch ${url}:`, e);
+          console.error(`Jina fetch failed for ${url}:`, e);
         }
-
-        const combinedText = `Title: ${title}\nDescription: ${sanitizeText(metaDesc)}\n\nWebsite Content:\n${sanitizeText(bodyText)}`;
 
         // 4. Intelligence Extraction via AI
         await logActivity(workspaceId, "AI_ANALYSIS", `Extracting Intelligence`, `Running proprietary models to parse firmographics and signals for ${domain}.`);
