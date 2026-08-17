@@ -118,17 +118,35 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
       searchContext = await performMockSearch(company.name, company.domain || "");
     }
     
+    // Sanitize context to prevent prompt injection
+    searchContext = sanitizeText(searchContext);
+
     // 3. AI Inference & Extraction
     const prompt = buildPrompt(company, searchContext);
     
-    const response = await ai.chat.completions.create({
-      model: "llama-3.1-8b-instant",
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" },
-      temperature: 0.2
-    });
+    // Retry logic (up to 3 attempts with exponential backoff)
+    let response;
+    let retries = 0;
+    const maxRetries = 3;
 
-    if (!response.choices[0].message.content) throw new Error("AI returned no output");
+    while (retries < maxRetries) {
+      try {
+        response = await ai.chat.completions.create({
+          model: "llama-3.1-8b-instant",
+          messages: [{ role: "user", content: prompt }],
+          response_format: { type: "json_object" },
+          temperature: 0.2
+        });
+        break; // Success
+      } catch (err) {
+        retries++;
+        console.warn(`Intelligence extraction attempt ${retries} failed:`, err);
+        if (retries >= maxRetries) throw err;
+        await new Promise(resolve => setTimeout(resolve, retries * 1000));
+      }
+    }
+
+    if (!response?.choices[0].message.content) throw new Error("AI returned no output");
 
     const text = response.choices[0].message.content.trim();
     const data = JSON.parse(text);
@@ -149,7 +167,7 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
           sourceUrl: ev.sourceUrl || `https://google.com/search?q=${encodeURIComponent(company.name)}`,
           sourceName: ev.sourceName || "Web Search",
           sourceType: ev.sourceType || "web",
-          isVerified: true
+          isVerified: false // MUST NOT blindly trust AI verification
         }
       });
       savedEvidence.push(created);
@@ -369,4 +387,16 @@ function mapAIOutputToScoreInput(data: any): ScoreInput {
 function clampScore(value: unknown): number {
   const num = typeof value === 'number' ? value : 0;
   return Math.max(0, Math.min(100, Math.round(num)));
+}
+
+/** Sanitize text to remove common prompt injection vectors and excessive whitespace */
+export function sanitizeText(text: string): string {
+  if (!text) return "";
+  return text
+    .replace(/<\|.*?\|>/g, '') // Remove special tokens
+    .replace(/(ignore previous instructions|system:|user:|assistant:|you are a)/gi, '[REDACTED]') // Block direct injections
+    .replace(/<[^>]*>?/gm, '') // Remove stray HTML tags
+    .replace(/\s+/g, ' ') // Collapse whitespace
+    .trim()
+    .substring(0, 15000); // Hard cap on length
 }

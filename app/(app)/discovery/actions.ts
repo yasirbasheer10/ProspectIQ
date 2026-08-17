@@ -15,7 +15,32 @@ export async function startDiscovery(payload: {
   }
 }) {
   const session = await getSession();
-  const workspaceId = session?.workspaceId || "demo";
+  if (!session?.user) {
+    throw new Error("Unauthorized: You must be logged in to start discovery.");
+  }
+  const workspaceId = session.workspaceId;
+  if (!workspaceId) throw new Error("Workspace missing");
+
+  // 1. Enforce Budget Limit
+  const agent = await prisma.customAgent.findFirst({
+    where: { workspaceId, isActive: true }
+  });
+  const budgetLimit = agent?.budgetLimit || 100;
+
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+
+  const usageCount = await prisma.company.count({
+    where: { 
+      workspaceId,
+      createdAt: { gte: startOfMonth }
+    }
+  });
+
+  if (usageCount >= budgetLimit) {
+    throw new Error(`Budget Limit Exceeded: Your active agent has reached its limit of ${budgetLimit} discovered targets this month.`);
+  }
 
   // Parse custom domains if any
   let customDomains: string[] = [];
@@ -33,6 +58,11 @@ export async function startDiscovery(payload: {
           return d;
         }
       });
+  }
+
+  // Check if this manual import exceeds the budget immediately
+  if (customDomains.length > 0 && (usageCount + customDomains.length) > budgetLimit) {
+    throw new Error(`Budget Limit Exceeded: Importing ${customDomains.length} domains would exceed your monthly limit of ${budgetLimit}.`);
   }
 
   // Create AgentRun
@@ -62,6 +92,9 @@ export async function startDiscovery(payload: {
 }
 
 export async function checkRunStatus(runId: string) {
+  const session = await getSession();
+  if (!session?.user) throw new Error("Unauthorized");
+  
   const run = await prisma.agentRun.findUnique({
     where: { id: runId }
   });
