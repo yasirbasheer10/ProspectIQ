@@ -48,7 +48,7 @@ export function Sidebar() {
       <div className="px-6 pt-6 pb-2">
         <div className="mb-4 flex items-center">
           <Image 
-            src="/ProspectIQ .png" 
+            src="/landing-page/assets/prospectiq-logo.png" 
             alt="ProspectIQ Logo" 
             width={110}
             height={24}

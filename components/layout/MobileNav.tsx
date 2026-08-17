@@ -29,7 +29,7 @@ export function MobileNav() {
       {/* Top Bar */}
       <div className="flex h-14 items-center justify-between bg-white px-4 border-b border-[#E5E5EA]">
         <Image 
-          src="/ProspectIQ .png" 
+          src="/landing-page/assets/prospectiq-logo.png" 
           alt="ProspectIQ Logo" 
           width={120}
           height={24}
