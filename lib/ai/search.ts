@@ -25,14 +25,23 @@ export async function performSearch(query: string) {
         });
 
         if (!response.ok) {
-          throw new Error(`Serper API error: ${response.statusText}`);
+          const err = new Error(`Serper API error: ${response.statusText}`) as Error & { status?: number };
+          err.status = response.status;
+          throw err;
         }
         
         break; // Success
       } catch (err) {
         retries++;
         console.warn(`Serper API attempt ${retries} failed:`, err);
-        if (retries >= maxRetries) throw err;
+        // A 4xx means the request itself is invalid — retrying sends the
+        // exact same broken request again and will fail identically every
+        // time. Only retry on things that can plausibly succeed on a second
+        // try: rate limits (429), server errors (5xx), or network failures
+        // (no status at all, e.g. a timeout).
+        const status = (err as Error & { status?: number }).status;
+        const isRetryable = !status || status === 429 || status >= 500;
+        if (!isRetryable || retries >= maxRetries) throw err;
         await new Promise(resolve => setTimeout(resolve, retries * 1000));
       }
     }
