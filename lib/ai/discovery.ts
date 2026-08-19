@@ -290,7 +290,6 @@ const ENTERPRISE_EXCLUSIONS: { domain: string; term: string }[] = [
   { domain: "meta.com", term: "Meta" },
 ];
 const EXCLUDED_DOMAIN_SET = new Set(ENTERPRISE_EXCLUSIONS.map(e => e.domain));
-const EXCLUDE_TERMS_QUERY = ENTERPRISE_EXCLUSIONS.map(e => `-${e.term}`).join(" ");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
@@ -324,20 +323,38 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
     //    wider, less-famous, more relevant candidate pool — and running several
     //    query angles instead of one also gives the extraction step a bigger
     //    pool of distinct domains to choose from.
-    const keywordsClause = keywords.length > 0 ? ` ${keywords.join(" ")}` : "";
+    // Only wrap industries in an exact-phrase quote when there's a single one —
+    // a quoted multi-industry string like "E-commerce, SaaS" almost never
+    // appears verbatim on any real page, and silently starves the search.
+    const industryTerm = industries.includes(",") ? industries : `"${industries}"`;
+
+    // Baseline enterprise exclusions are deliberately NOT put in the query text —
+    // stacking ~20 "-term" exclusions onto an already-narrow query compounds
+    // with industry/keyword narrowing and can starve results to near zero.
+    // They're still fully enforced via the deterministic domain filter below.
+    // The user's own explicit exclusions are a much smaller, intentional list,
+    // so those stay in the query text.
     const userExcludeClause = excludeKeywords.length > 0
       ? " " + excludeKeywords.map(k => `-"${k}"`).join(" ")
       : "";
-    // Baseline exclusion always applies, independent of what the user checked —
-    // these are cross-industry giants that can surface in almost any category's
-    // search results, not just their "home" industry.
-    const excludeClause = `${userExcludeClause} ${EXCLUDE_TERMS_QUERY}`;
 
-    const queryAngles = [
-      `"${industries}" companies hiring ${regions} ${size}${keywordsClause} -"top 10" -"best"${excludeClause}`,
-      `"${industries}" startups ${regions} funding OR "series a" OR "series b" ${size}${keywordsClause}${excludeClause}`,
-      `"${industries}" company directory OR "companies list" ${regions} ${size}${keywordsClause}${excludeClause}`,
-    ];
+    // Each keyword gets its own full set of query angles instead of being
+    // AND'd together with the others — "DTC skincare", "beverages", and
+    // "supplements" are three different sub-verticals, and requiring a page
+    // to match all three at once (the old behavior) returns almost nothing.
+    // Capped at 3 keywords to keep total Serper calls bounded.
+    const keywordVariants = keywords.length > 0 ? keywords.slice(0, 3) : [""];
+
+    const buildAngles = (kw: string) => {
+      const kwClause = kw ? ` ${kw}` : "";
+      return [
+        `${industryTerm} companies hiring ${regions} ${size}${kwClause} -"top 10" -"best"${userExcludeClause}`,
+        `${industryTerm} startups ${regions} funding OR "series a" OR "series b" ${size}${kwClause}${userExcludeClause}`,
+        `${industryTerm} company directory OR "companies list" ${regions} ${size}${kwClause}${userExcludeClause}`,
+      ];
+    };
+
+    const queryAngles = keywordVariants.flatMap(buildAngles);
 
     const searchResults = await Promise.all(queryAngles.map(q => performSearch(q).catch(() => null)));
 
@@ -360,7 +377,7 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
       .map(res => `Title: ${res.title}\nLink: ${res.link}\nSnippet: ${res.snippet}`)
       .join('\n\n');
 
-    const prompt = `You are a B2B lead generation researcher. Review the following Google Search results to find up to 25 real, active company websites that exactly match this Ideal Customer Profile. Prefer specific, real companies over famous household names — avoid companies that only appear because they were mentioned in a "best of" or "top X" listicle rather than because they genuinely match the ICP.
+    const prompt = `You are a B2B lead generation researcher. Review the following Google Search results to find up to 40 real, active company websites that exactly match this Ideal Customer Profile. Prefer specific, real companies over famous household names — avoid companies that only appear because they were mentioned in a "best of" or "top X" listicle rather than because they genuinely match the ICP.
     
     ICP Config:
     Industries: ${industries}
@@ -371,7 +388,7 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
     ${searchContext}
 
     Requirements:
-    1. Extract up to 25 root domains (e.g. stripe.com) from the search results that fit the ICP.
+    1. Extract up to 40 root domains (e.g. stripe.com) from the search results that fit the ICP.
     2. Do NOT make them up. They must be present in the search context.
     3. Prefer smaller and mid-sized real companies over famous market leaders — if a domain only appears because it was in a "best of" or ranking-style article rather than a genuine ICP match, skip it.
     ${excludeKeywords.length > 0 ? `4. Do NOT include any of the following companies under any circumstances, even if they appear in the search results: ${excludeKeywords.join(", ")}.\n    5. You must return valid JSON matching this schema exactly:` : "4. You must return valid JSON matching this schema exactly:"}
