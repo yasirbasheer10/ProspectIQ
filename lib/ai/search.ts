@@ -19,7 +19,8 @@ export async function performSearch(query: string) {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            q: query
+            q: query,
+            num: 20
           })
         });
 
