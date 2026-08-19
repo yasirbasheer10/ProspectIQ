@@ -6,9 +6,10 @@ import { Topbar } from "@/components/layout/Topbar";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { Globe, Building, Users, Search, Loader2, ListFilter, FileDown, X, Check } from "lucide-react";
+import { Globe, Building, Users, Search, Loader2, ListFilter, FileDown, X, Check, Tag, Ban } from "lucide-react";
 import { startDiscovery, checkRunStatus } from "./actions";
 import { Country, City, State } from "country-state-city";
+import { KNOWN_COMPANIES } from "@/lib/data/known-companies";
 
 const DEFAULT_COUNTRIES = [
   "United States", "United Kingdom", "Canada", "Australia", 
@@ -125,6 +126,72 @@ export function DiscoveryClient({ icp }: { icp: any }) {
   const [isSizeEnabled, setIsSizeEnabled] = useState(true);
   const [sizeIndex, setSizeIndex] = useState(2); // Default to 51-200
 
+  // Keywords State (narrows the category itself, e.g. "DTC skincare")
+  const [keywords, setKeywords] = useState<string[]>([]);
+  const [keywordInput, setKeywordInput] = useState("");
+
+  // Exclude Companies State
+  const [excludeKeywords, setExcludeKeywords] = useState<string[]>([]);
+  const [excludeInput, setExcludeInput] = useState("");
+
+  // Suggested big-player exclusions, deduped across whichever industries are checked
+  const suggestedExclusions = useMemo(() => {
+    const activeIndustries = Object.keys(industries).filter(k => industries[k]);
+    const seen = new Set<string>();
+    const merged: { name: string; domain: string }[] = [];
+    for (const ind of activeIndustries) {
+      for (const company of KNOWN_COMPANIES[ind] || []) {
+        if (!seen.has(company.name)) {
+          seen.add(company.name);
+          merged.push(company);
+        }
+      }
+    }
+    return merged;
+  }, [industries]);
+
+  const addKeyword = () => {
+    const trimmed = keywordInput.trim();
+    if (trimmed && !keywords.includes(trimmed)) {
+      setKeywords(prev => [...prev, trimmed]);
+    }
+    setKeywordInput("");
+  };
+
+  const removeKeyword = (kw: string) => {
+    setKeywords(prev => prev.filter(k => k !== kw));
+  };
+
+  const addExclude = (value?: string) => {
+    const trimmed = (value ?? excludeInput).trim();
+    if (trimmed && !excludeKeywords.includes(trimmed)) {
+      setExcludeKeywords(prev => [...prev, trimmed]);
+    }
+    if (!value) setExcludeInput("");
+  };
+
+  const removeExclude = (name: string) => {
+    setExcludeKeywords(prev => prev.filter(k => k !== name));
+  };
+
+  const toggleSuggestedExclude = (name: string) => {
+    if (excludeKeywords.includes(name)) {
+      removeExclude(name);
+    } else {
+      addExclude(name);
+    }
+  };
+
+  const selectAllSuggested = () => {
+    setExcludeKeywords(prev => {
+      const next = [...prev];
+      for (const c of suggestedExclusions) {
+        if (!next.includes(c.name)) next.push(c.name);
+      }
+      return next;
+    });
+  };
+
   // Derived Geography Data
   const allGlobalCountries = useMemo(() => Country.getAllCountries(), []);
   
@@ -172,7 +239,9 @@ export function DiscoveryClient({ icp }: { icp: any }) {
           icpParams: {
             countries: selectedGeo,
             industries: activeIndustries,
-            size: isSizeEnabled ? SIZE_BUCKETS[sizeIndex] : null
+            size: isSizeEnabled ? SIZE_BUCKETS[sizeIndex] : null,
+            keywords,
+            excludeKeywords
           }
         });
       }
@@ -394,6 +463,109 @@ export function DiscoveryClient({ icp }: { icp: any }) {
                     </div>
                   </div>
                 </div>
+              </Card>
+
+              {/* Keywords Card */}
+              <Card className="p-5 shadow-sm hover:shadow-apple-md hover:-translate-y-0.5 transition-all flex flex-col">
+                <div className="flex items-center gap-3 mb-4">
+                  <Tag size={24} className="text-[#0071E3]" />
+                  <h3 className="text-[18px] font-medium text-[#1D1D1F]">Keywords</h3>
+                </div>
+                <div className="h-px w-full bg-[#E5E5EA] mb-4" />
+                <p className="text-[13px] text-[#86868B] mb-3 leading-relaxed">
+                  Narrow the category, e.g. &quot;DTC skincare&quot; or &quot;subscription box&quot; instead of just E-commerce.
+                </p>
+                <input
+                  type="text"
+                  placeholder="Type a keyword and press Enter..."
+                  className="w-full px-4 py-2.5 bg-[#F5F5F7] border border-transparent rounded-lg text-sm focus:outline-none focus:border-[#0071E3] focus:ring-1 focus:ring-[#0071E3] transition-all mb-3"
+                  value={keywordInput}
+                  onChange={e => setKeywordInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addKeyword(); } }}
+                />
+                <div className="flex flex-wrap gap-2">
+                  {keywords.map(kw => (
+                    <span
+                      key={kw}
+                      className="group flex items-center gap-2 px-4 py-1.5 rounded-full border text-[13px] font-medium border-[#0071E3] bg-[#0071E3] text-white shadow-sm"
+                    >
+                      {kw}
+                      <div
+                        className="p-0.5 rounded-full hover:bg-black/20 transition-colors cursor-pointer"
+                        onClick={() => removeKeyword(kw)}
+                      >
+                        <X size={14} />
+                      </div>
+                    </span>
+                  ))}
+                </div>
+              </Card>
+
+              {/* Exclude Companies Card */}
+              <Card className="p-5 shadow-sm hover:shadow-apple-md hover:-translate-y-0.5 transition-all flex flex-col">
+                <div className="flex items-center gap-3 mb-4">
+                  <Ban size={24} className="text-[#0071E3]" />
+                  <h3 className="text-[18px] font-medium text-[#1D1D1F]">Exclude Companies</h3>
+                </div>
+                <div className="h-px w-full bg-[#E5E5EA] mb-4" />
+                <input
+                  type="text"
+                  placeholder="Type a company name and press Enter..."
+                  className="w-full px-4 py-2.5 bg-[#F5F5F7] border border-transparent rounded-lg text-sm focus:outline-none focus:border-[#0071E3] focus:ring-1 focus:ring-[#0071E3] transition-all mb-3"
+                  value={excludeInput}
+                  onChange={e => setExcludeInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addExclude(); } }}
+                />
+                {excludeKeywords.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {excludeKeywords.map(name => (
+                      <span
+                        key={name}
+                        className="group flex items-center gap-2 px-4 py-1.5 rounded-full border text-[13px] font-medium border-[#FF3B30] bg-[#FF3B30] text-white shadow-sm"
+                      >
+                        {name}
+                        <div
+                          className="p-0.5 rounded-full hover:bg-black/20 transition-colors cursor-pointer"
+                          onClick={() => removeExclude(name)}
+                        >
+                          <X size={14} />
+                        </div>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {suggestedExclusions.length > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[13px] text-[#86868B]">Suggested big players to exclude</span>
+                      <button
+                        onClick={selectAllSuggested}
+                        className="text-[13px] font-medium text-[#0071E3] hover:text-[#0062CC] transition-colors"
+                      >
+                        Select all
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2 max-h-[120px] overflow-y-auto scrollbar-thin">
+                      {suggestedExclusions.map(company => {
+                        const isSelected = excludeKeywords.includes(company.name);
+                        return (
+                          <button
+                            key={company.name}
+                            onClick={() => toggleSuggestedExclude(company.name)}
+                            className={`px-3.5 py-1.5 rounded-full border text-[13px] font-medium transition-all ${
+                              isSelected
+                                ? "border-[#FF3B30] bg-[#FF3B30] text-white shadow-sm"
+                                : "border-[#E5E5EA] bg-white text-[#4B5563] hover:border-[#86868B]"
+                            }`}
+                          >
+                            {company.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </Card>
             </div>
           )}
