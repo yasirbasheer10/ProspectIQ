@@ -19,13 +19,13 @@ export async function performSearch(query: string) {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            q: query,
-            num: 20
+            q: query
           })
         });
 
         if (!response.ok) {
-          const err = new Error(`Serper API error: ${response.statusText}`) as Error & { status?: number };
+          const errorText = await response.text();
+          const err = new Error(`Serper API error (${response.status}): ${response.statusText}. Query: "${query}". Response: ${errorText}`) as Error & { status?: number };
           err.status = response.status;
           throw err;
         }
