@@ -12,6 +12,8 @@ export async function startDiscovery(payload: {
     countries: Record<string, string[]>;
     industries: string[];
     size: string | null;
+    keywords?: string[];
+    excludeKeywords?: string[];
   }
 }) {
   const session = await getSession();
