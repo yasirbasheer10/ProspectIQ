@@ -350,12 +350,19 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
     const safeSize     = size ? size.slice(0, 30) : "";
     const keywordVariants = keywords.length > 0 ? keywords.slice(0, 3) : [""];
 
+    // Add up to 5 user exclusions directly to the Google search as negative match
+    // terms (-"term"). This powerfully narrows down the search before results are
+    // even returned. We cap it at 5 so the query string doesn't get too long.
+    const userExcludeClause = excludeKeywords.length > 0
+      ? " " + excludeKeywords.slice(0, 5).map(k => `-"${k.replace(/"/g, '')}"`).join(" ")
+      : "";
+
     const buildAngles = (kw: string) => {
       const kwClause = kw ? ` ${kw.slice(0, 25)}` : "";
       return [
-        `${safeIndustry} companies hiring ${safeRegion}${kwClause}`.trim(),
-        `${safeIndustry} startups funding "series a" OR "series b" ${safeRegion}`.trim(),
-        `${safeIndustry} companies ${safeRegion} ${safeSize}`.trim(),
+        `${safeIndustry} companies hiring ${safeRegion}${kwClause}${userExcludeClause}`.trim(),
+        `${safeIndustry} startups funding "series a" OR "series b" ${safeRegion}${userExcludeClause}`.trim(),
+        `${safeIndustry} companies ${safeRegion} ${safeSize}${userExcludeClause}`.trim(),
       ];
     };
 
