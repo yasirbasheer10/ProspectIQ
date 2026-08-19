@@ -40,9 +40,14 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
     }
 
     if (domainsToScrape.length === 0) {
-      // Fallback to Demo Discovery if everything fails
-      await logActivity(workspaceId, "DEMO_FALLBACK", "No domains found", "Falling back to demo discovery list.");
-      domainsToScrape = ["acme.com", "globaltech.io", "zephyr-systems.co"];
+      // Previously this silently fell back to a hardcoded demo company list
+      // (acme.com, globaltech.io, zephyr-systems.co), which meant a totally
+      // failed search looked identical to real results in the UI — actively
+      // misleading for a lead-intelligence tool. Failing loudly here instead:
+      // the run shows as FAILED with a clear reason, and the run itself
+      // throws before any fake data gets persisted.
+      await logActivity(workspaceId, "NO_RESULTS", "No matching companies found", "The search returned no results — try broadening filters (fewer exclusions, fewer keywords, or a wider region) and run again.");
+      throw new Error("No target domains found for the given criteria. Try broadening your filters — fewer exclusions, fewer keywords, or a wider region/industry selection often helps.");
     }
 
     // Update AgentRun total items
@@ -302,8 +307,16 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
 
     if (icpParams) {
       industries = icpParams.industries.join(", ");
+      // Keep regions compact — "United States (ALL); United Kingdom (ALL)"
+      // adds length without adding real search signal, and was a meaningful
+      // contributor to queries long enough to get rejected outright by
+      // Serper. When a country has specific cities/states picked, cap how
+      // many get listed so a large selection can't blow the query up either.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      regions = Object.entries(icpParams.countries).map(([c, locs]: any) => `${c} (${locs.join(", ")})`).join("; ");
+      regions = Object.entries(icpParams.countries).map(([c, locs]: any) => {
+        if (!locs || locs.length === 0 || locs.includes("ALL")) return c;
+        return `${c} (${locs.slice(0, 3).join(", ")})`;
+      }).join(", ");
       if (icpParams.size) size = `Company Size: ${icpParams.size} employees`;
       keywords = icpParams.keywords || [];
       excludeKeywords = icpParams.excludeKeywords || [];
@@ -334,8 +347,14 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
     // They're still fully enforced via the deterministic domain filter below.
     // The user's own explicit exclusions are a much smaller, intentional list,
     // so those stay in the query text.
+    // Cap how many exclusions actually go into the query text — the earlier
+    // fix already moved the ~20-name baseline list out of the query entirely,
+    // but a user can still select many suggestion chips (16+ across two
+    // industries). Only the first 6 go into the search text; the rest are
+    // still fully enforced by the deterministic domain filter after results
+    // come back, which doesn't cost any query length.
     const userExcludeClause = excludeKeywords.length > 0
-      ? " " + excludeKeywords.map(k => `-"${k}"`).join(" ")
+      ? " " + excludeKeywords.slice(0, 6).map(k => `-"${k}"`).join(" ")
       : "";
 
     // Each keyword gets its own full set of query angles instead of being
@@ -347,11 +366,17 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
 
     const buildAngles = (kw: string) => {
       const kwClause = kw ? ` ${kw}` : "";
-      return [
+      const angles = [
         `${industryTerm} companies hiring ${regions} ${size}${kwClause} -"top 10" -"best"${userExcludeClause}`,
         `${industryTerm} startups ${regions} funding OR "series a" OR "series b" ${size}${kwClause}${userExcludeClause}`,
         `${industryTerm} company directory OR "companies list" ${regions} ${size}${kwClause}${userExcludeClause}`,
       ];
+      // Final hard safety net: whatever combination of filters produced this
+      // string, it can never be sent past a length that risks a 400 — trim
+      // rather than fail. Serper doesn't document an exact limit, so this
+      // stays comfortably under the ~2048-char range other search APIs are
+      // known to reject past.
+      return angles.map(a => a.length > 300 ? a.slice(0, 300) : a);
     };
 
     const queryAngles = keywordVariants.flatMap(buildAngles);
