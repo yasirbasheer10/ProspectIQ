@@ -339,44 +339,24 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
     // Only wrap industries in an exact-phrase quote when there's a single one —
     // a quoted multi-industry string like "E-commerce, SaaS" almost never
     // appears verbatim on any real page, and silently starves the search.
+    // Keep each query component short so the combined string stays well under
+    // Serper's limit. Exclusion clauses are NOT added to the query text at all —
+    // they're enforced by the deterministic EXCLUDED_DOMAIN_SET filter after
+    // results come back, which is both more reliable and costs zero query length.
+    // Trim each input component before combining so no single field can blow up.
     const industryTerm = industries.includes(",") ? industries : `"${industries}"`;
-
-    // Baseline enterprise exclusions are deliberately NOT put in the query text —
-    // stacking ~20 "-term" exclusions onto an already-narrow query compounds
-    // with industry/keyword narrowing and can starve results to near zero.
-    // They're still fully enforced via the deterministic domain filter below.
-    // The user's own explicit exclusions are a much smaller, intentional list,
-    // so those stay in the query text.
-    // Cap how many exclusions actually go into the query text — the earlier
-    // fix already moved the ~20-name baseline list out of the query entirely,
-    // but a user can still select many suggestion chips (16+ across two
-    // industries). Only the first 6 go into the search text; the rest are
-    // still fully enforced by the deterministic domain filter after results
-    // come back, which doesn't cost any query length.
-    const userExcludeClause = excludeKeywords.length > 0
-      ? " " + excludeKeywords.slice(0, 6).map(k => `-"${k}"`).join(" ")
-      : "";
-
-    // Each keyword gets its own full set of query angles instead of being
-    // AND'd together with the others — "DTC skincare", "beverages", and
-    // "supplements" are three different sub-verticals, and requiring a page
-    // to match all three at once (the old behavior) returns almost nothing.
-    // Capped at 3 keywords to keep total Serper calls bounded.
+    const safeIndustry = industryTerm.slice(0, 40);
+    const safeRegion   = regions.slice(0, 40);
+    const safeSize     = size ? size.slice(0, 30) : "";
     const keywordVariants = keywords.length > 0 ? keywords.slice(0, 3) : [""];
 
     const buildAngles = (kw: string) => {
-      const kwClause = kw ? ` ${kw}` : "";
-      const angles = [
-        `${industryTerm} companies hiring ${regions} ${size}${kwClause} -"top 10" -"best"${userExcludeClause}`,
-        `${industryTerm} startups ${regions} funding OR "series a" OR "series b" ${size}${kwClause}${userExcludeClause}`,
-        `${industryTerm} company directory OR "companies list" ${regions} ${size}${kwClause}${userExcludeClause}`,
+      const kwClause = kw ? ` ${kw.slice(0, 25)}` : "";
+      return [
+        `${safeIndustry} companies hiring ${safeRegion}${kwClause}`.trim(),
+        `${safeIndustry} startups funding "series a" OR "series b" ${safeRegion}`.trim(),
+        `${safeIndustry} companies ${safeRegion} ${safeSize}`.trim(),
       ];
-      // Final hard safety net: whatever combination of filters produced this
-      // string, it can never be sent past a length that risks a 400 — trim
-      // rather than fail. Serper doesn't document an exact limit, so this
-      // stays comfortably under the ~2048-char range other search APIs are
-      // known to reject past.
-      return angles.map(a => a.length > 300 ? a.slice(0, 300) : a);
     };
 
     const queryAngles = keywordVariants.flatMap(buildAngles);
