@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/session";
+import { sweepStaleRuns } from "@/lib/ai/stale-runs";
 import { formatDistanceToNow } from "date-fns";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { Bot, Search, Zap, Target, Mail, Activity } from "lucide-react";
@@ -19,6 +20,11 @@ export default async function AgentActivityPage() {
   const session = await getSession();
   const workspaceId = session?.workspaceId || "demo";
 
+  // Correct any run that died without writing a terminal status before we read
+  // it — otherwise this page shows a permanent "Now Executing" card for a run
+  // that was torn down hours ago, and the Start button stays disabled.
+  await sweepStaleRuns(workspaceId);
+
   // Find the most recent orchestrator run
   const activeRun = await prisma.agentRun.findFirst({
     where: { 
@@ -33,21 +39,18 @@ export default async function AgentActivityPage() {
     take: 50 // limit for UI
   });
 
-  // Fallback demo logs if no DB data
-  const finalLogs = activities.length > 0 
-    ? activities.map(act => ({
-        id: act.id,
-        action: act.type, // e.g. "COMPANY_DISCOVERED"
-        details: act.description || (act.metadata ? JSON.stringify(act.metadata) : ""),
-        time: formatDistanceToNow(new Date(act.createdAt), { addSuffix: true }),
-        icon: getIconForActivityType(act.type)
-      }))
-    : [
-      { id: "1", action: "Discovered Company", details: "Acme Commerce matches E-commerce ICP.", time: "10m ago", icon: "Search" },
-      { id: "2", action: "Analyzed Signals", details: "Found checkout redesign signal for Acme Commerce.", time: "15m ago", icon: "Zap" },
-      { id: "3", action: "Generated Opportunity", title: "Acme Commerce - CRO", details: "Scored 92/100 based on recent signals.", time: "16m ago", icon: "Target" },
-      { id: "4", action: "Drafted Outreach", details: "Prepared email for Sarah Jenkins (VP E-commerce).", time: "17m ago", icon: "Mail" },
-    ];
+  // No demo-log fallback. This used to invent four activity entries — a company
+  // called "Acme Commerce" and a person called "Sarah Jenkins" — whenever the
+  // Activity table was empty, so a workspace that had never run the pipeline (or
+  // one whose runs all failed) looked like it had been working. The client
+  // already renders a proper "No recent actions." empty state for an empty array.
+  const finalLogs = activities.map(act => ({
+    id: act.id,
+    action: act.type, // e.g. "COMPANY_DISCOVERED"
+    details: act.description || (act.metadata ? JSON.stringify(act.metadata) : ""),
+    time: formatDistanceToNow(new Date(act.createdAt), { addSuffix: true }),
+    icon: getIconForActivityType(act.type)
+  }));
 
   return <AgentActivityClient activeRun={activeRun} finalLogs={finalLogs} />;
 }

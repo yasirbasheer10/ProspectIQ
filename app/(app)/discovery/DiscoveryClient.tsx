@@ -75,7 +75,11 @@ export function DiscoveryClient({ icp }: { icp: any }) {
           
           if (status.status === "FAILED") {
             setIsScanning(false);
-            setErrorMsg("Discovery run failed. Please try again.");
+            // Show the reason the engine recorded, not just "it failed". The
+            // engines write a specific cause to AgentRun.errorMessage — a missing
+            // SERPER_API_KEY reads very differently from an ICP that matched
+            // nothing, and only one of them is worth retrying.
+            setErrorMsg(status.errorMessage || "Discovery run failed. Please try again.");
           } else {
             setLoadingStep(4); // 4: Done
             setTimeout(() => {

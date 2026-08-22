@@ -60,11 +60,15 @@ export async function POST(req: NextRequest) {
       user: { id: user.id, email: user.email, name: user.name }
     }), { status: 201 })
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof z.ZodError) {
       return new Response(JSON.stringify({ error: error.issues[0].message }), { status: 400 })
     }
+    // The real reason goes to the server log only. This used to return
+    // `Debug Error: ${error.message}` to the caller, which on an unauthenticated
+    // endpoint hands out Prisma messages, table and column names, and connection
+    // strings to anyone who can POST malformed data at it.
     console.error("Registration error:", error)
-    return new Response(JSON.stringify({ error: `Debug Error: ${error.message || String(error)}` }), { status: 500 })
+    return new Response(JSON.stringify({ error: "Could not create your account. Please try again." }), { status: 500 })
   }
 }

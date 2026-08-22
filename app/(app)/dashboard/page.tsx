@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/session";
+import { sweepStaleRuns } from "@/lib/ai/stale-runs";
 import {
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
   Building2,
@@ -44,6 +45,16 @@ export default async function DashboardPage() {
     take: 3,
   });
 
+  // Whether anything is genuinely in flight. The status pill used to be
+  // hardcoded to "Online & Scanning" with a pulsing dot, which claimed the agent
+  // was working on an app that has no scheduler — nothing runs until someone
+  // clicks a button, so the badge was permanently wrong.
+  await sweepStaleRuns(workspaceId);
+  const activeRunCount = await prisma.agentRun.count({
+    where: { workspaceId, status: { in: ["QUEUED", "RUNNING"] } }
+  });
+  const isAgentBusy = activeRunCount > 0;
+
   return (
     <div className="flex h-full flex-col bg-white">
       <main className="flex-1 overflow-y-auto">
@@ -53,13 +64,19 @@ export default async function DashboardPage() {
           <div>
             {/* Status pill */}
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-[#E5E5EA] bg-white px-3 py-1 shadow-sm">
-              <div className="h-1.5 w-1.5 rounded-full bg-[#0071E3] animate-pulse" />
-              <span className="text-[11px] font-medium text-[#1D1D1F]">Agent Status: Online &amp; Scanning</span>
+              <div className={`h-1.5 w-1.5 rounded-full ${isAgentBusy ? "bg-[#0071E3] animate-pulse" : "bg-[#86868B]"}`} />
+              <span className="text-[11px] font-medium text-[#1D1D1F]">
+                {isAgentBusy
+                  ? `Agent Status: Running ${activeRunCount} task${activeRunCount === 1 ? "" : "s"}`
+                  : "Agent Status: Idle"}
+              </span>
             </div>
 
             <Greeting userName={firstName} />
             <p className="text-[15px] text-[#6E6E73] max-w-xl mb-6">
-              Your revenue agent is working in the background, analyzing market signals and identifying new pipeline opportunities.
+              {isAgentBusy
+                ? "Your revenue agent is working right now — analyzing market signals and identifying new pipeline opportunities."
+                : "Start a discovery run to find new companies, or open Agent Activity to run the full pipeline."}
             </p>
 
             <DashboardActions />

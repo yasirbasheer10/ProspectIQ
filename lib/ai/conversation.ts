@@ -1,12 +1,13 @@
 import { ai } from "./gemini";
 import { prisma } from "../db";
 import { ReplyClassification } from "@prisma/client";
+import { ConversationReplySchema, parseAIResponse } from "./schemas";
 
 const conversationSchemaDefinition = `
 {
   "intent": "INTERESTED | QUESTION | OBJECTION | NOT_NOW | REFERRAL | MEETING_REQUEST | NEGATIVE | UNSUBSCRIBE | UNKNOWN",
   "suggestedAction": "A short, actionable recommendation for the user",
-  "opportunityStatus": "QUALIFIED | WON | LOST | null",
+  "opportunityStatus": "CONVERTED | LOST | null",
   "suggestedReply": "A drafted email response to send back",
   "summary": "A 1-2 sentence summary of what the prospect said"
 }
@@ -57,7 +58,7 @@ ${inboundMessageBody}
 Task:
 1. Classify the exact intent of the reply. Must be one of: INTERESTED, QUESTION, OBJECTION, NOT_NOW, REFERRAL, MEETING_REQUEST, NEGATIVE, UNSUBSCRIBE, UNKNOWN.
 2. Recommend the best next action (e.g., "Send meeting link", "Address pricing objection").
-3. Determine if the Opportunity Status should change. For example, if UNSUBSCRIBE, it's LOST. If MEETING_REQUEST or INTERESTED, maybe QUALIFIED. Otherwise return null.
+3. Determine if the Opportunity Status should change. Only "CONVERTED" or "LOST" are valid — for example, if UNSUBSCRIBE or clearly not interested, it's LOST; if they have agreed to buy or committed, it's CONVERTED. Otherwise return null.
 4. Draft a highly professional, concise response to this reply. If it's an UNSUBSCRIBE, just draft a short "No problem, taking you off the list."
 5. Provide a short summary of the prospect's reply.
 
@@ -75,10 +76,13 @@ ${conversationSchemaDefinition}
 
     const text = response.choices[0].message.content;
     if (!text) throw new Error("Empty response from AI");
-    
-    const data = JSON.parse(text);
 
-    const intent = data.intent as ReplyClassification;
+    // Validated, not cast. `intent` and `opportunityStatus` both land in enum
+    // columns, so an unrecognised string used to fail the insert after the
+    // reply had already arrived — leaving no record of it at all.
+    const data = parseAIResponse(text, ConversationReplySchema, "Reply classification failed");
+
+    const intent = data.intent;
 
     // 1. Create the Inbound Message
     const inboundMessage = await prisma.conversationMessage.create({
@@ -112,10 +116,10 @@ ${conversationSchemaDefinition}
     }
 
     // 4. Update Opportunity if suggested
-    if (opportunity && data.opportunityStatus && ["CONVERTED", "LOST"].includes(data.opportunityStatus)) {
+    if (opportunity && data.opportunityStatus) {
       await prisma.opportunity.update({
         where: { id: opportunity.id },
-        data: { status: data.opportunityStatus as "CONVERTED" | "LOST" }
+        data: { status: data.opportunityStatus }
       });
     }
 

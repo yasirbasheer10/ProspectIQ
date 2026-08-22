@@ -59,7 +59,11 @@ export async function startOrchestratorRun(workspaceId: string) {
     console.error("Orchestrator crashed:", error);
     await prisma.agentRun.update({
       where: { id: run.id },
-      data: { status: "FAILED", errorMessage: error.message }
+      data: {
+        status: "FAILED",
+        completedAt: new Date(),
+        errorMessage: error instanceof Error ? error.message : String(error)
+      }
     });
   });
 
@@ -238,7 +242,7 @@ async function orchestratorLoop(runId: string, workspaceId: string) {
     console.error("Fatal orchestrator error:", errorMsg);
     await prisma.agentRun.update({
       where: { id: runId },
-      data: { status: "FAILED", errorMessage: errorMsg }
+      data: { status: "FAILED", errorMessage: errorMsg, completedAt: new Date() }
     });
   }
 }
@@ -253,6 +257,6 @@ export async function pauseOrchestratorRun(runId: string) {
 export async function stopOrchestratorRun(runId: string) {
   return await prisma.agentRun.update({
     where: { id: runId },
-    data: { status: "CANCELLED" }
+    data: { status: "CANCELLED", completedAt: new Date() }
   });
 }

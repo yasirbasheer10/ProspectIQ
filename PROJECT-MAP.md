@@ -45,6 +45,8 @@ The `ORCHESTRATOR` is a loop that walks companies through stages 2–4 automatic
 | Scores feel wrong | `lib/scoring/opportunity-score.ts` (weights at the top) |
 | Emails read badly | `lib/ai/outreach.ts` (the prompt is inline) |
 | Wrong AI model / model errors | `lib/ai/gemini.ts` — **this file is Groq, not Gemini** |
+| "…failed: <field> — Required" errors from a run | `lib/ai/schemas.ts` — the zod schema for that call rejected the model's reply |
+| A run sits at "Running" forever, or gets marked failed too early | `lib/ai/stale-runs.ts` (15-minute no-progress timeout) |
 | Auto-pilot stalls or loops | `lib/ai/orchestrator.ts` |
 | Login / signup / Google / LinkedIn | `lib/auth.ts` |
 | Redirects for logged-out / logged-in users | `proxy.ts` — **this is Next 16's middleware file** |
@@ -67,7 +69,7 @@ app/
   onboarding/     first-run wizard (ICP + Offer)
   api/            auth endpoints, health check, demo seed/reset
 components/       shared UI (11 files) — layout/ and ui/
-lib/              all the real logic (18 files) — see table above
+lib/              all the real logic (20 files) — see table above
 prisma/           schema.prisma — 24 tables, 11 enums
 __tests__/        3 test files — scoring, demo fixtures, utils
 scripts/          save.ps1 and undo.ps1 (your deploy + rollback)
@@ -112,7 +114,8 @@ Hunter is only called when a company scores 70+, to protect the 50-credits/month
 
 ## Known problems found on 2026-08-22
 
-Listed worst-first. None are fixed yet except the build script and the two fake-data fallbacks.
+Listed worst-first. The whole P0 batch from `ARCHITECTURE-AUDIT.md` is now fixed (items 1, 2, 8, 9
+and the three new entries below); everything else is still open.
 
 1. **Fixed 2026-08-22 — fake companies are no longer hardcoded.** `lib/ai/discovery.ts` used to
    return `["vercel.com", "stripe.com", "linear.app"]` in two places when the AI call failed, so a
@@ -151,6 +154,24 @@ Listed worst-first. None are fixed yet except the build script and the two fake-
    is ever needed back. **`proxy.ts` was deliberately kept** — see the note below; it is live code.
 10. **Tests only cover scoring, demo fixtures and utils.** Nothing tests discovery, intelligence,
     outreach or auth.
+11. **Fixed 2026-08-23 — LLM output is validated before it reaches the database.** All four engines
+    used to `JSON.parse` the model's reply and write the fields straight into Prisma, so a missing
+    field became an empty column and an unrecognised `SignalType` string became a failed insert
+    halfway through a run. `lib/ai/schemas.ts` now holds one zod schema per call site and a shared
+    `parseAIResponse(raw, schema, label)` that throws a message naming the real problem. It also
+    fixed a live bug in `conversation.ts`, whose prompt asked the model for `QUALIFIED | WON | LOST`
+    while the code only accepted `CONVERTED | LOST` — so the opportunity status could only ever be
+    set to `LOST`.
+12. **Fixed 2026-08-23 — dead runs are detectable.** Background work is started with an un-awaited
+    promise inside a serverless request, so when the function is frozen the run stays `RUNNING`
+    forever and the UI polls it forever. `sweepStaleRuns()` in `lib/ai/stale-runs.ts` marks any
+    `QUEUED`/`RUNNING` run with no write in 15 minutes as `FAILED`, and is called from the discovery
+    poller, the agent-activity page and the dashboard. This is a safety net, not a scheduler — the
+    pipeline still has nowhere durable to run.
+13. **Fixed 2026-08-23 — the register route no longer returns raw errors.** It used to reply
+    `Debug Error: ${error.message}`, handing database and stack text to any client. It now logs
+    server-side and returns *"Could not create your account. Please try again."* Registration is
+    still unthrottled (audit P1 item 10).
 
 ---
 

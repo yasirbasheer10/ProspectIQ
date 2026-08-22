@@ -64,17 +64,22 @@ the right call for a single-tenant-ish app and avoids maintaining an API surface
 ### What to improve
 
 **No scheduler exists.** There is no `vercel.json`, no cron route, and no queue. Every "agent"
-run starts only when a human clicks a button. The product language throughout the UI says
-otherwise — `dashboard/page.tsx` renders a pulsing dot with the text *"Agent Status: Online &
-Scanning"* while nothing is scanning. Either add a cron entry point or change the copy.
+run starts only when a human clicks a button. The product language throughout the UI used to say
+otherwise — `dashboard/page.tsx` rendered a pulsing dot reading *"Agent Status: Online &
+Scanning"* while nothing was scanning. **Fixed 2026-08-23:** the pill now counts real
+`QUEUED`/`RUNNING` runs and reads "Idle" when there are none, so the copy is honest. The scheduler
+itself still doesn't exist — adding a cron entry point remains open.
 
-**Background work is fire-and-forget on serverless.** `app/(app)/discovery/actions.ts:85` starts
+**Background work is fire-and-forget on serverless.** `app/(app)/discovery/actions.ts` starts
 `runDiscoveryEngine(...).catch(console.error)` without awaiting, and
-`lib/ai/orchestrator.ts:58` does the same with `orchestratorLoop`. On Vercel the function
+`lib/ai/orchestrator.ts` does the same with `orchestratorLoop`. On Vercel the function
 instance can be frozen or reclaimed once the response is returned, so a long run can simply stop
-mid-way. Nothing detects that: the `AgentRun` row stays `RUNNING` forever, and the UI polls a
-status that will never change. This is the most consequential architectural issue in the repo,
-because it means the core feature is unreliable in exactly the environment it deploys to.
+mid-way. This is still the most consequential architectural issue in the repo, because it means the
+core feature is unreliable in exactly the environment it deploys to.
+**Partially mitigated 2026-08-23:** the failure is at least now *detected* rather than invisible —
+`sweepStaleRuns` (`lib/ai/stale-runs.ts`) marks any run with no progress in 15 minutes as `FAILED`,
+so the UI stops polling a status that will never change. The run still dies; it just no longer lies
+about it. A durable runner (queue, or a cron route that resumes work) is the real fix.
 
 **Two features are shells.** `Sequences` has a page that reads `prisma.sequence.findMany`, a
 `SequenceStep` table, and a `sequences` nav item — but nothing anywhere creates a sequence except
@@ -250,15 +255,27 @@ writes the message to the activity log and marks the `AgentRun` `FAILED`.
 records as `FAILED` with `errorMessage`, and `triggerIntelligenceRun` returns to the browser.
 `performMockSearch` is deleted.
 
-Still live in the same family, and not addressed by that change: the fake citation URL and the
-hardcoded `0.8` signal relevance below, and the "Online & Scanning" badge in section 1.
+The rest of the family was cleared on 2026-08-23: the fake citation URL and the hardcoded signal
+relevance below are now `null`, the invented activity-feed entries are gone, and the
+"Online & Scanning" badge in section 1 reflects real run state.
 
-**Nothing validates the model's output before it hits the database.** Every engine does
+**Nothing validates the model's output before it hits the database.** ~~Every engine does
 `JSON.parse(text)` and then walks the result directly — `for (const ev of data.evidence)`
 (`intelligence.ts:160`), `data.signals` (`:177`), `data.problems.join` (`:200`). If a field is
-missing or the wrong type, this throws partway through, after some rows have already been written.
-`zod` is already installed and used in two auth routes; the LLM boundary is where it's actually
-needed.
+missing or the wrong type, this throws partway through, after some rows have already been written.~~
+**Fixed 2026-08-23.** `lib/ai/schemas.ts` holds one zod schema per call site plus a shared
+`parseAIResponse(raw, schema, label)`, which distinguishes an empty response, unparseable JSON (and
+quotes the first 200 characters) and a shape mismatch (and names the failing field paths). All four
+engines validate before their first write.
+
+Notable specifics that fell out of it: a shared `SignalTypeSchema` replaced `intelligence.ts`'s
+hand-rolled `validTypes` array and closed the same hole in `discovery.ts`, which wrote the model's
+raw `signals[].type` string straight into the `SignalType` enum column. `conversation.ts`'s prompt
+asked the model for `QUALIFIED | WON | LOST` — neither `QUALIFIED` nor `WON` exists in
+`OpportunityStatus`, and the code silently checked for `CONVERTED | LOST` instead, so the branch was
+effectively dead; the prompt now asks for the two real values and the schema enforces them.
+`extractCompanyData` still returns `null` rather than throwing on a bad response, deliberately: one
+unparseable page logs `SCRAPE_FAILED` and the batch continues.
 
 **Multi-step writes aren't atomic.** `researchCompany` writes evidence, then signals, then an
 opportunity with its score, then contacts, then Hunter contacts, then updates the company — six
@@ -295,10 +312,13 @@ in `discovery/actions.ts`.
 the company from the database and appends a string to the state; it performs no buyer lookup. The
 LLM is asked to choose between four actions, one of which is a no-op that always "succeeds".
 
-**Fake citations and hardcoded confidence.** `intelligence.ts:167` falls back to a Google search
+**Fake citations and hardcoded confidence.** ~~`intelligence.ts:167` falls back to a Google search
 URL as an evidence `sourceUrl` when the model doesn't supply one, which produces a citation that
 looks real and proves nothing. `intelligence.ts:189` writes `relevance: 0.8` on every signal
-regardless of content, so signal relevance carries no information.
+regardless of content, so signal relevance carries no information.~~
+**Fixed 2026-08-23.** `sourceUrl` is left `null` when the model supplies none, so an uncited fact
+stays visibly uncited. Signal `relevance` is `null` in both writers (`intelligence.ts` had `0.8`,
+`discovery.ts` had `0.9`) until something actually computes it — both columns are already nullable.
 
 **The model name is hardcoded in three places.** `"openai/gpt-oss-120b"` appears as a literal in
 `intelligence.ts:135`, `orchestrator.ts:129` and `conversation.ts`. Meanwhile `lib/ai/gemini.ts`
@@ -349,12 +369,17 @@ mutations so lists refresh.
 
 ### What to improve
 
-**Internal errors leak to the browser.** `register/route.ts` ends with:
+**~~Internal errors leak to the browser.~~** ~~`register/route.ts` ends with:~~
 ```ts
 return new Response(JSON.stringify({ error: `Debug Error: ${error.message || String(error)}` }), { status: 500 })
 ```
-That returns raw database and stack messages to any client, and the `catch (error: any)` above it
-opts out of type checking. Log the detail server-side, return a generic message.
+~~That returns raw database and stack messages to any client, and the `catch (error: any)` above it
+opts out of type checking. Log the detail server-side, return a generic message.~~
+**Fixed 2026-08-23.** The handler is now `catch (error: unknown)`; a `z.ZodError` returns its first
+issue message with 400 (that text is written by us and safe to show), and anything else is logged
+server-side with `console.error("Registration error:", error)` and answered with a flat
+*"Could not create your account. Please try again."* at 500. `reset-password/route.ts` was checked
+and already did this correctly — `register` was the only leaking route.
 
 **8 of 13 action files never check who is logged in.** No `getSession()` call appears in
 `agents/[id]/actions.ts`, `agents/[id]/settings/actions.ts`, `companies/[id]/actions.ts`,
@@ -571,14 +596,19 @@ fake people in `intelligence.ts`, a Google search URL standing in for a real cit
 `0.8` relevance on every signal, an "Online & Scanning" badge over an idle system. Each one
 individually looks like a harmless convenience. Together they mean you cannot tell a working run
 from a broken one, which makes every other bug in this document undiagnosable. This is why it's
-first on the list below. **The two worst cases — the fake domains and the fake people — were fixed
-on 2026-08-22; the citation URL, the `0.8` relevance and the badge remain.**
+first on the list below. **Cleared: the fake domains and fake people on 2026-08-22; the citation
+URL, the hardcoded relevance, the "Online & Scanning" badge and the four invented Agent Activity
+log entries on 2026-08-23. Two cosmetic fabrications are left, both on the dashboard and both
+newly listed as item 20 under P2 — the `"94%"` confidence placeholder and the two static
+Intelligence Feed cards.**
 
 **Two — trust boundaries aren't enforced.** Two boundaries matter in this app: the browser and the
-language model. Neither is checked. Eight action files skip the session check and two take identity
-from their caller; no server action validates its input. On the other side, LLM JSON is parsed and
-written straight to the database with no schema. `zod` is installed and used in two auth routes —
-the tool is already there, just pointed at the least risky surface.
+language model. ~~Neither is checked.~~ Eight action files skip the session check and two take
+identity from their caller; no server action validates its input. ~~On the other side, LLM JSON is
+parsed and written straight to the database with no schema. `zod` is installed and used in two auth
+routes — the tool is already there, just pointed at the least risky surface.~~
+**The model boundary was closed on 2026-08-23** — `lib/ai/schemas.ts` validates every response
+before any write. The browser boundary is still open and is now the whole of P1 items 5 and 6.
 
 **Three — long-running work has no home.** The core value of the product is a pipeline that takes
 minutes. It's started with an un-awaited promise inside a serverless request, checks no budget in
@@ -593,18 +623,38 @@ not more features.
 
 **P0 — do these first; nothing else is debuggable until they're done**
 
+All four are done. Kept here as a record of what changed and where.
+
 1. ~~Delete both fake-data fallbacks: `discovery.ts:434` and `:444`, and `intelligence.ts:118`
    together with `performMockSearch` at `:334`. Let failed runs fail visibly.~~
    **Done 2026-08-22.** Both engines now throw with the real reason and the `AgentRun` is marked
-   `FAILED`; `performMockSearch` is deleted. See section 3 for what replaced them. The rest of the
-   "invents data rather than admitting failure" family is untouched: the Google-search-URL citation
-   fallback (`intelligence.ts`), the hardcoded `relevance: 0.8` on every signal, and the
-   "Agent Status: Online & Scanning" badge on an idle system.
-2. Validate every LLM response with `zod` before writing: `intelligence.ts`, `discovery.ts`,
-   `outreach.ts`, `conversation.ts`.
-3. Stop leaking internal errors from `register/route.ts`.
-4. Make dead runs detectable — at minimum, mark an `AgentRun` `FAILED` if it has been `RUNNING`
-   past a timeout, so the UI stops waiting on work that no longer exists.
+   `FAILED`; `performMockSearch` is deleted. See section 3 for what replaced them.
+   **The rest of the family was cleared on 2026-08-23:** the Google-search-URL citation fallback and
+   the hardcoded `relevance: 0.8`/`0.9` on signals are now `null`; the four invented activity-feed
+   entries in `agent-activity/page.tsx` ("Acme Commerce", "Sarah Jenkins") are gone, leaving the
+   client's existing empty state; and the dashboard's "Agent Status: Online & Scanning" pill now
+   counts real `QUEUED`/`RUNNING` runs and says "Idle" when there are none.
+2. ~~Validate every LLM response with `zod` before writing: `intelligence.ts`, `discovery.ts`,
+   `outreach.ts`, `conversation.ts`.~~
+   **Done 2026-08-23.** `lib/ai/schemas.ts` holds one schema per call site plus a shared
+   `parseAIResponse(raw, schema, label)` that throws a message naming the actual problem (empty
+   response / invalid JSON with the first 200 chars / the failing field paths). All four engines use
+   it; there are no bare `JSON.parse` calls left on model output outside the orchestrator's ReAct
+   step, which already has a full fallback branch. A shared `SignalTypeSchema` replaced the
+   hand-rolled `validTypes` whitelist in `intelligence.ts` and closed the same hole in
+   `discovery.ts`, which wrote the model's raw string straight into the `SignalType` column.
+3. ~~Stop leaking internal errors from `register/route.ts`.~~
+   **Done 2026-08-23.** Returns a generic message; the real error goes to `console.error` only.
+   `catch (error: any)` is now `unknown`. `reset-password` was already correct.
+4. ~~Make dead runs detectable — at minimum, mark an `AgentRun` `FAILED` if it has been `RUNNING`
+   past a timeout, so the UI stops waiting on work that no longer exists.~~
+   **Done 2026-08-23.** `lib/ai/stale-runs.ts` exports `sweepStaleRuns(workspaceId?)`, which marks
+   any `QUEUED`/`RUNNING` run with no write in 15 minutes as `FAILED` with a message pointing at the
+   Vercel function logs. `PAUSED` is deliberately excluded. Called from `checkRunStatus` (the poller),
+   the agent-activity page and the dashboard. Supporting changes: `runDiscoveryEngine` now sets
+   `RUNNING` + `startedAt` instead of leaving the run `QUEUED` for its whole life, every engine sets
+   `completedAt` on its terminal transition, and `DiscoveryClient` surfaces the run's real
+   `errorMessage` instead of "Discovery run failed. Please try again."
 
 **P1 — correctness and safety**
 
@@ -632,3 +682,22 @@ not more features.
 17. Add a deterministic ICP-fit component to scoring so ranking is reproducible.
 18. Either finish or hide Sequences and outbound sending.
 19. Introduce migrations before the schema changes again.
+20. Remove the last two cosmetic fabrications on `dashboard/page.tsx`: the `"94%"` confidence
+    average shown whenever no opportunity is `APPROVED` (line 104), and the two hardcoded
+    Intelligence Feed cards for "Acme Corp" and "Sarah Jenkins" (lines 124–170), which render above
+    the real signals — so on an empty workspace the "No signals yet" empty state appears directly
+    underneath two invented signals. Left for P2 because they mislead only the person looking at the
+    screen — unlike the P0 cases, nothing reads them back or writes them to the database.
+
+**Also open, added 2026-08-23 while doing P0**
+
+- `searchForTargetsWithAI` (`discovery.ts`) ends with `return filtered.length > 0 ? filtered : domains`,
+  so when the enterprise-exclusion filter removes every candidate the function returns the
+  *unfiltered* list — the filter silently doesn't apply in exactly the case it matters. Decide
+  whether an empty filtered list should be an error or an empty result, but it shouldn't be a
+  bypass.
+- The model name `"openai/gpt-oss-120b"` is written as a literal at six call sites across five
+  files. Covered by item 12's "centralise the model constant".
+- The 15-minute stale-run timeout is a heuristic, not a fix for the root cause. Until the pipeline
+  runs somewhere durable (theme three), a run that dies at second 30 still shows as `RUNNING` for
+  15 minutes.

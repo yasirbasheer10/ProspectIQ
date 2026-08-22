@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/session";
 import { runDiscoveryEngine } from "@/lib/ai/discovery";
+import { sweepStaleRuns } from "@/lib/ai/stale-runs";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { redirect } from "next/navigation";
 
@@ -96,9 +97,15 @@ export async function startDiscovery(payload: {
 export async function checkRunStatus(runId: string) {
   const session = await getSession();
   if (!session?.user) throw new Error("Unauthorized");
-  
+
+  // This is the endpoint the UI polls while a run is in progress, so it's the
+  // right place to notice a run that has stopped making progress. Without this
+  // a run killed mid-execution stays QUEUED/RUNNING forever and the client
+  // polls a spinner indefinitely.
+  await sweepStaleRuns(session.workspaceId ?? undefined);
+
   const run = await prisma.agentRun.findUnique({
     where: { id: runId }
   });
-  return { status: run?.status };
+  return { status: run?.status, errorMessage: run?.errorMessage };
 }

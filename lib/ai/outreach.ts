@@ -1,5 +1,6 @@
 import { prisma } from "../db";
 import { ai } from "./gemini";
+import { OutreachSchema, parseAIResponse } from "./schemas";
 
 const outreachSchemaDefinition = `
 {
@@ -37,6 +38,7 @@ export async function generateOutreach(opportunityId: string, contactId: string,
       workspaceId,
       type: "DRAFT_OUTREACH",
       status: "RUNNING",
+      startedAt: new Date(),
       title: `Generate Outreach for ${contact.fullName}`,
     }
   });
@@ -107,8 +109,15 @@ ${outreachSchemaDefinition}
 
     const text = response?.choices[0].message.content;
     if (!text) throw new Error("Empty response from AI");
-    
-    const data = JSON.parse(text);
+
+    // A draft missing its subject or body used to be saved as an empty message
+    // that looked ready to send. Failing here routes to the clearly-labelled
+    // safe template below instead, which is honest about needing an edit.
+    const data = parseAIResponse(
+      text,
+      OutreachSchema,
+      `Outreach draft for ${contact.fullName} failed`
+    );
 
     // Save to database
     let message;
@@ -140,7 +149,7 @@ ${outreachSchemaDefinition}
 
     await prisma.agentRun.update({
       where: { id: run.id },
-      data: { status: "COMPLETED", resultSummary: "Message generated." }
+      data: { status: "COMPLETED", completedAt: new Date(), resultSummary: "Message generated." }
     });
 
     return message;
@@ -149,7 +158,7 @@ ${outreachSchemaDefinition}
     console.error("Outreach Generation Error (Exhausted retries):", error);
     await prisma.agentRun.update({
       where: { id: run.id },
-      data: { status: "FAILED", errorMessage: error instanceof Error ? error.message : String(error) }
+      data: { status: "FAILED", completedAt: new Date(), errorMessage: error instanceof Error ? error.message : String(error) }
     });
     
     // Provide a safe, honest template instead of a hallucination

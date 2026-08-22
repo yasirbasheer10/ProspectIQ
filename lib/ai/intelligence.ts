@@ -1,7 +1,11 @@
+import type { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ai } from "./gemini";
 import { performSearch } from "./search";
+import { IntelligenceSchema, parseAIResponse } from "./schemas";
 import { calculateOpportunityScore, type ScoreInput } from "@/lib/scoring/opportunity-score";
+
+type IntelligenceOutput = z.infer<typeof IntelligenceSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // TYPES & SCHEMAS
@@ -92,6 +96,7 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
       workspaceId,
       type: "RESEARCH",
       status: "RUNNING",
+      startedAt: new Date(),
       title: "Opportunity Intelligence",
       description: `Analyzing company ID: ${companyId}`,
     }
@@ -157,8 +162,14 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
 
     if (!response?.choices[0].message.content) throw new Error("AI returned no output");
 
-    const text = response.choices[0].message.content.trim();
-    const data = JSON.parse(text);
+    // Validate before writing anything. The engine writes evidence, signals, an
+    // opportunity and contacts in sequence, so an unchecked field that only
+    // fails at step 6 leaves half a research run committed to the database.
+    const data = parseAIResponse(
+      response.choices[0].message.content,
+      IntelligenceSchema,
+      `Research of ${company.name} failed`
+    );
 
     // 4. Calculate Scores using the REAL scoring engine
     const scoreInput = mapAIOutputToScoreInput(data);
@@ -171,9 +182,12 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
         data: {
           companyId,
           title: ev.title,
-          summary: ev.summary,
+          summary: ev.summary ?? "",
           quote: ev.quote || "",
-          sourceUrl: ev.sourceUrl || `https://google.com/search?q=${encodeURIComponent(company.name)}`,
+          // No invented citation. This used to fall back to a Google search URL
+          // for the company name, which reads like a source but proves nothing —
+          // the column is nullable, so an uncited fact stays visibly uncited.
+          sourceUrl: ev.sourceUrl || null,
           sourceName: ev.sourceName || "Web Search",
           sourceType: ev.sourceType || "web",
           isVerified: false // MUST NOT blindly trust AI verification
@@ -184,18 +198,16 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
 
     // 6. Store AI INFERENCE (Signals)
     for (const sig of data.signals) {
-      // Basic mapping of signal types from string to SignalType enum
-      const validTypes = ["HIRING", "FUNDING", "PRODUCT_LAUNCH", "LEADERSHIP_CHANGE", "EXPANSION", "TECHNOLOGY_CHANGE", "PAIN_POINT", "COMPETITOR_MENTION", "REGULATORY", "PARTNERSHIP", "AWARD", "PRESS_MENTION", "JOB_POSTING"];
-      const type = validTypes.includes(sig.type) ? sig.type : "PRESS_MENTION";
-
       await prisma.signal.create({
         data: {
           companyId,
-          type: type as "HIRING" | "FUNDING" | "PRODUCT_LAUNCH" | "LEADERSHIP_CHANGE" | "EXPANSION" | "TECHNOLOGY_CHANGE" | "PAIN_POINT" | "COMPETITOR_MENTION" | "REGULATORY" | "PARTNERSHIP" | "AWARD" | "PRESS_MENTION" | "JOB_POSTING",
+          type: sig.type, // Already narrowed to a valid SignalType by the schema
           title: sig.title,
           description: sig.description,
           sourceName: sig.source || "AI Inference",
-          relevance: 0.8
+          // Not scored. This was hardcoded to 0.8, which made every signal look
+          // equally and confidently relevant; nothing computes a real value yet.
+          relevance: null
         }
       });
     }
@@ -314,6 +326,7 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
       where: { id: run.id },
       data: {
         status: "COMPLETED",
+        completedAt: new Date(),
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         outputData: { rawOutput: data, scores } as any,
         resultSummary: `Analyzed with score ${scores.overall} (Grade: ${scores.grade}, ${scores.qualifies ? 'QUALIFIED' : 'NOT QUALIFIED'})`
@@ -328,6 +341,7 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
       where: { id: run.id },
       data: {
         status: "FAILED",
+        completedAt: new Date(),
         errorMessage: error instanceof Error ? error.message : String(error)
       }
     });
@@ -370,8 +384,7 @@ ${intelligenceSchemaDefinition}
  * Each factor is derived from the AI's independent assessment rather than
  * a single self-reported confidence number.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function mapAIOutputToScoreInput(data: any): ScoreInput {
+function mapAIOutputToScoreInput(data: IntelligenceOutput): ScoreInput {
   const assessment = data.scoring_assessment;
 
   // If the AI returned proper per-factor assessments, use them directly
@@ -389,14 +402,11 @@ function mapAIOutputToScoreInput(data: any): ScoreInput {
   // Fallback: derive scores from structural evidence in the AI output
   // This is still better than the old approach because each factor is
   // independently evaluated based on what the AI actually found
-  const hasProblems = Array.isArray(data.problems) && data.problems.length > 0;
-  const hasSignals = Array.isArray(data.signals) && data.signals.length > 0;
-  const hasEvidence = Array.isArray(data.evidence) && data.evidence.length > 0;
-  const hasDecisionMakers = Array.isArray(data.decision_makers) && data.decision_makers.length > 0;
-  const hasVerifiedContacts = hasDecisionMakers && data.decision_makers.some(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (dm: any) => dm.email || dm.is_verified
-  );
+  const hasProblems = data.problems.length > 0;
+  const hasSignals = data.signals.length > 0;
+  const hasEvidence = data.evidence.length > 0;
+  const hasDecisionMakers = data.decision_makers.length > 0;
+  const hasVerifiedContacts = data.decision_makers.some(dm => dm.email || dm.is_verified);
 
   return {
     icpFit: hasEvidence ? 65 + Math.min(25, data.evidence.length * 8) : 40,

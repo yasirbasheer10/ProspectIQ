@@ -1,7 +1,9 @@
+import type { z } from "zod";
 import { prisma } from "@/lib/db";
 import { ai } from "./gemini";
 import { performSearch } from "./search";
 import { sanitizeText } from "./intelligence";
+import { DiscoveryDomainsSchema, ExtractedCompanySchema, parseAIResponse } from "./schemas";
 
 interface DiscoveryParams {
   workspaceId: string;
@@ -20,6 +22,15 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
   const { workspaceId, agentRunId, customDomains, icpParams } = params;
 
   try {
+    // Mark the run as actually running. It's created QUEUED by the caller and
+    // was previously only ever moved to COMPLETED/FAILED, so an in-progress run
+    // was indistinguishable from one that never started — and the stale-run
+    // sweep had no way to tell "waiting to begin" from "begun and then died".
+    await prisma.agentRun.update({
+      where: { id: agentRunId },
+      data: { status: "RUNNING", startedAt: new Date() }
+    });
+
     // 1. Log Start
     await logActivity(workspaceId, "START_DISCOVERY", "Started Discovery Run", `Initialized discovery engine. Run ID: ${agentRunId}`);
 
@@ -135,12 +146,14 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
               await prisma.signal.create({
                 data: {
                   companyId: company.id,
-                  type: sig.type,
+                  type: sig.type, // Already narrowed to a valid SignalType by the schema
                   title: sig.title,
                   description: sig.description,
                   sourceUrl: url,
                   sourceName: "Website Scraping",
-                  relevance: 0.9,
+                  // Not scored. This was hardcoded to 0.9 — a confidence number
+                  // nothing had actually measured. Left null until something does.
+                  relevance: null,
                 }
               });
             }
@@ -173,7 +186,7 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
     // 6. Complete Run
     await prisma.agentRun.update({
       where: { id: agentRunId },
-      data: { status: "COMPLETED" }
+      data: { status: "COMPLETED", completedAt: new Date() }
     });
     
     await logActivity("RUN_COMPLETE", "Discovery Run Completed", `Successfully finished processing ${domainsToScrape.length} targets.`);
@@ -187,7 +200,7 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
     // FAILED discovery run carries no explanation anywhere queryable.
     await prisma.agentRun.update({
       where: { id: agentRunId },
-      data: { status: "FAILED", errorMessage: reason }
+      data: { status: "FAILED", errorMessage: reason, completedAt: new Date() }
     });
   }
 }
@@ -226,10 +239,13 @@ const companySchemaDefinition = `
 }
 `;
 
-async function extractCompanyData(scrapedText: string, sourceUrl: string) {
+async function extractCompanyData(
+  scrapedText: string,
+  sourceUrl: string
+): Promise<z.infer<typeof ExtractedCompanySchema> | null> {
   try {
     const prompt = `Analyze the following website text scraped from ${sourceUrl}. Extract the firmographic data (including headquarters location) and any potential buying signals or recent news.\n\nWebsite Text:\n${scrapedText}\n\nYou must return valid JSON matching this schema exactly:\n${companySchemaDefinition}`;
-    
+
     let response;
     let retries = 0;
     const maxRetries = 3;
@@ -252,8 +268,16 @@ async function extractCompanyData(scrapedText: string, sourceUrl: string) {
     }
 
     if (response?.choices[0].message.content) {
-      const text = response.choices[0].message.content.trim();
-      return JSON.parse(text);
+      // Validated, not just parsed: `signals[].type` was previously written
+      // straight into a SignalType enum column, so any value the model invented
+      // failed the insert mid-loop. Returning null on a bad response keeps the
+      // existing behaviour — this one domain logs SCRAPE_FAILED and the batch
+      // carries on — rather than aborting the whole run for one bad page.
+      return parseAIResponse(
+        response.choices[0].message.content,
+        ExtractedCompanySchema,
+        `Extraction failed for ${sourceUrl}`
+      );
     }
   } catch (error) {
     console.error("AI Extraction Error:", error);
@@ -457,20 +481,18 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any): Promise<strin
       throw new Error("Target search failed: the AI returned an empty response when asked to extract domains from the search results.");
     }
 
-    const text = response.choices[0].message.content.trim();
-    const parsed = JSON.parse(text);
-
     // There is deliberately no hardcoded domain list here. This used to read
     //   parsed.domains || ["vercel.com", "stripe.com", "linear.app"]
     // so a model response missing its "domains" key produced three plausible
     // companies and the run reported success — a broken run was
     // indistinguishable from a working one. A malformed response is a
     // failure; say so and let the caller mark the AgentRun FAILED.
-    if (!Array.isArray(parsed.domains)) {
-      throw new Error(`Target search failed: the AI response contained no "domains" array. Keys received: ${Object.keys(parsed).join(", ") || "none"}.`);
-    }
+    const { domains } = parseAIResponse(
+      response.choices[0].message.content,
+      DiscoveryDomainsSchema,
+      "Target search failed"
+    );
 
-    const domains: string[] = parsed.domains;
     // Deterministic final filter — doesn't rely on the AI actually honoring
     // the "don't include X" instruction in the prompt, since instructions
     // can occasionally be missed. A plain Set lookup can't be.
