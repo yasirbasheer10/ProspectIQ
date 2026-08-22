@@ -99,7 +99,7 @@ agent-activity, deploy, settings, profile.
 | Service | Used for | Env var | If the key is missing |
 |---|---|---|---|
 | Groq | all AI (model `openai/gpt-oss-120b`) | `GROQ_API_KEY` | falls back to a dummy key, calls fail |
-| Serper | Google search | `SERPER_API_KEY` | search returns null, quietly |
+| Serper | Google search | `SERPER_API_KEY` | search returns null; discovery and research now fail the run loudly |
 | Jina Reader | reading company websites | `JINA_API_KEY` | works unauthenticated but rate-limited |
 | Hunter.io | finding real email addresses | `HUNTER_API_KEY` | skipped silently |
 | Resend | sending email | `RESEND_API_KEY` | email skipped |
@@ -112,16 +112,19 @@ Hunter is only called when a company scores 70+, to protect the 50-credits/month
 
 ## Known problems found on 2026-08-22
 
-Listed worst-first. None are fixed yet except the build script.
+Listed worst-first. None are fixed yet except the build script and the two fake-data fallbacks.
 
-1. **Fake companies are still hardcoded.** `lib/ai/discovery.ts` returns
-   `["vercel.com", "stripe.com", "linear.app"]` in two places when the AI call fails — so a
-   broken run looks identical to a successful one. The file's own comments say this behaviour was
-   deliberately removed; it wasn't.
-2. **Fake people are still hardcoded.** `lib/ai/intelligence.ts` → `performMockSearch()` invents
-   plausible names, roles and email addresses when Serper fails, and the AI then saves them as
-   real contacts. The prompt says "do not hallucinate names like Sarah Jenkins" while the code
-   feeds it exactly that.
+1. **Fixed 2026-08-22 — fake companies are no longer hardcoded.** `lib/ai/discovery.ts` used to
+   return `["vercel.com", "stripe.com", "linear.app"]` in two places when the AI call failed, so a
+   broken run looked identical to a successful one. `searchForTargetsWithAI` now throws with the
+   real reason — empty AI response, a response with no `domains` array, any error inside the
+   function, or every search query coming back empty — and `runDiscoveryEngine`'s handler logs that
+   reason and marks the `AgentRun` **FAILED**.
+2. **Fixed 2026-08-22 — fake people are no longer hardcoded.** `performMockSearch()` in
+   `lib/ai/intelligence.ts` invented plausible names, roles and email addresses when Serper failed,
+   and the AI then saved them as real contacts. The function is deleted; `researchCompany` now
+   throws when the search returns no results, which marks the run **FAILED** and shows the reason
+   on the company page.
 3. **8 of 13 action files never check who is logged in.** Anything in `contacts`, `outreach`,
    `profile`, `conversations`, `deploy`, `agents` and `companies/[id]` will act on any record ID
    it's handed. `triggerIntelligenceRun(companyId, workspaceId)` takes the workspace from the

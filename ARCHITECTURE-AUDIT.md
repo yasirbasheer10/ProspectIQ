@@ -216,28 +216,42 @@ setting a flag.
 
 ### What to improve
 
-**The app fabricates data instead of failing — in two places, and this is the headline problem.**
+**~~The app fabricates data instead of failing — in two places, and this is the headline problem.~~
+Fixed 2026-08-22.** Both fallbacks are gone; the description below is kept as the record of what
+was wrong and what replaced it.
 
-`discovery.ts:434` — if the model's JSON has no `domains` key:
+`discovery.ts:434` — if the model's JSON had no `domains` key:
 ```ts
 const domains: string[] = parsed.domains || ["vercel.com", "stripe.com", "linear.app"];
 ```
-`discovery.ts:444` — if the whole call throws, the function returns the same three domains. So a
-completely failed search produces three plausible companies and reports success.
+`discovery.ts:444` — if the whole call threw, the function returned the same three domains. So a
+completely failed search produced three plausible companies and reported success.
 
-`intelligence.ts:118` — if Serper returns nothing, research falls back to `performMockSearch`
-(`intelligence.ts:334`), which invents a funding round, an expansion story, and two named people
-with fabricated email addresses, deterministically hashed from the company name so they look
-stable across runs. That text then goes into the prompt, and the model dutifully extracts those
-people, which get written to the `Contact` table with `sourceName: "AI Inference"`. The prompt in
+`intelligence.ts:118` — if Serper returned nothing, research fell back to `performMockSearch`
+(`intelligence.ts:334`), which invented a funding round, an expansion story, and two named people
+with fabricated email addresses, deterministically hashed from the company name so they looked
+stable across runs. That text then went into the prompt, and the model dutifully extracted those
+people, which were written to the `Contact` table with `sourceName: "AI Inference"`. The prompt in
 the very same file says *"Do not hallucinate names like 'Sarah Jenkins' or 'Marcus Ryle'"* while
-the code feeds it exactly that kind of name.
+the code fed it exactly that kind of name.
 
 The sharpest illustration: the header comment of the dead `lib/ai/providers.ts` reads *"NEVER
 fabricates real companies, people, or data — all demo content is clearly marked as synthetic."*
-The file that says this is unused; the files that fabricate are the live ones. Delete both
-fallbacks and let failures surface. Nothing else in this list can be debugged until a failed run
-looks like a failed run.
+The file that says this is unused; the files that fabricated were the live ones.
+
+**What it does now.** `searchForTargetsWithAI` is typed `Promise<string[]>` and either returns real
+domains or throws: on an empty AI response, on a response with no `domains` array (the key received
+is named in the message), and on any error inside the function — the reason is logged and rethrown
+rather than swallowed. It also fails early if every Serper query angle came back empty, so the run
+reports "web search failed / returned nothing" instead of the misleading "try broadening your
+filters" that an empty domain list produces downstream. `runDiscoveryEngine`'s existing handler
+writes the message to the activity log and marks the `AgentRun` `FAILED`.
+`researchCompany` throws when the search yields no organic results, which its existing handler
+records as `FAILED` with `errorMessage`, and `triggerIntelligenceRun` returns to the browser.
+`performMockSearch` is deleted.
+
+Still live in the same family, and not addressed by that change: the fake citation URL and the
+hardcoded `0.8` signal relevance below, and the "Online & Scanning" badge in section 1.
 
 **Nothing validates the model's output before it hits the database.** Every engine does
 `JSON.parse(text)` and then walks the result directly — `for (const ev of data.evidence)`
@@ -557,7 +571,8 @@ fake people in `intelligence.ts`, a Google search URL standing in for a real cit
 `0.8` relevance on every signal, an "Online & Scanning" badge over an idle system. Each one
 individually looks like a harmless convenience. Together they mean you cannot tell a working run
 from a broken one, which makes every other bug in this document undiagnosable. This is why it's
-first on the list below.
+first on the list below. **The two worst cases — the fake domains and the fake people — were fixed
+on 2026-08-22; the citation URL, the `0.8` relevance and the badge remain.**
 
 **Two — trust boundaries aren't enforced.** Two boundaries matter in this app: the browser and the
 language model. Neither is checked. Eight action files skip the session check and two take identity
@@ -578,8 +593,13 @@ not more features.
 
 **P0 — do these first; nothing else is debuggable until they're done**
 
-1. Delete both fake-data fallbacks: `discovery.ts:434` and `:444`, and `intelligence.ts:118`
-   together with `performMockSearch` at `:334`. Let failed runs fail visibly.
+1. ~~Delete both fake-data fallbacks: `discovery.ts:434` and `:444`, and `intelligence.ts:118`
+   together with `performMockSearch` at `:334`. Let failed runs fail visibly.~~
+   **Done 2026-08-22.** Both engines now throw with the real reason and the `AgentRun` is marked
+   `FAILED`; `performMockSearch` is deleted. See section 3 for what replaced them. The rest of the
+   "invents data rather than admitting failure" family is untouched: the Google-search-URL citation
+   fallback (`intelligence.ts`), the hardcoded `relevance: 0.8` on every signal, and the
+   "Agent Status: Online & Scanning" badge on an idle system.
 2. Validate every LLM response with `zod` before writing: `intelligence.ts`, `discovery.ts`,
    `outreach.ts`, `conversation.ts`.
 3. Stop leaking internal errors from `register/route.ts`.

@@ -179,11 +179,15 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
     await logActivity("RUN_COMPLETE", "Discovery Run Completed", `Successfully finished processing ${domainsToScrape.length} targets.`);
 
   } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : "An unexpected error occurred.";
     console.error("Discovery Engine Error:", error);
-    await logActivity("RUN_ERROR", "Discovery Run Failed", error instanceof Error ? error.message : "An unexpected error occurred.");
+    await logActivity("RUN_ERROR", "Discovery Run Failed", reason);
+    // Record the reason on the run itself, not just in the console and the
+    // activity feed — researchCompany already does this, and without it a
+    // FAILED discovery run carries no explanation anywhere queryable.
     await prisma.agentRun.update({
       where: { id: agentRunId },
-      data: { status: "FAILED" }
+      data: { status: "FAILED", errorMessage: reason }
     });
   }
 }
@@ -296,8 +300,11 @@ const ENTERPRISE_EXCLUSIONS: { domain: string; term: string }[] = [
 ];
 const EXCLUDED_DOMAIN_SET = new Set(ENTERPRISE_EXCLUSIONS.map(e => e.domain));
 
+// Returns the discovered domains, or throws with the reason it couldn't.
+// It must never return a placeholder list — see the notes in the tail of this
+// function.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
+async function searchForTargetsWithAI(icpParams: any, dbIcp: any): Promise<string[]> {
   try {
     let industries = "SaaS";
     let regions = "Global";
@@ -368,7 +375,13 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
 
     const queryAngles = keywordVariants.flatMap(buildAngles);
 
-    const searchResults = await Promise.all(queryAngles.map(q => performSearch(q).catch(() => null)));
+    const searchResults = await Promise.all(queryAngles.map(q =>
+      performSearch(q).catch(err => {
+        // Don't discard the reason — this is the only place it's visible.
+        console.error(`Target search query failed ("${q}"):`, err);
+        return null;
+      })
+    ));
 
     // Merge + dedupe organic results across all query angles by link
     const seenLinks = new Set<string>();
@@ -383,6 +396,18 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
           }
         }
       }
+    }
+
+    // Nothing came back from any angle. There is no source material for the
+    // model to extract domains from, so calling it would either return an
+    // empty list or invite it to invent one. Fail here with the actual
+    // reason rather than letting this surface downstream as the misleading
+    // "no matches — try broadening your filters".
+    if (mergedResults.length === 0) {
+      const everyQueryFailed = searchResults.every(r => r === null);
+      throw new Error(everyQueryFailed
+        ? `Web search failed for all ${queryAngles.length} queries. Check SERPER_API_KEY and the Serper error logged above.`
+        : `Web search returned no results for any of the ${queryAngles.length} queries built from this ICP.`);
     }
 
     const searchContext = mergedResults
@@ -428,18 +453,36 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any) {
       }
     }
 
-    if (response?.choices[0].message.content) {
-      const text = response.choices[0].message.content.trim();
-      const parsed = JSON.parse(text);
-      const domains: string[] = parsed.domains || ["vercel.com", "stripe.com", "linear.app"];
-      // Deterministic final filter — doesn't rely on the AI actually honoring
-      // the "don't include X" instruction in the prompt, since instructions
-      // can occasionally be missed. A plain Set lookup can't be.
-      const filtered = domains.filter(d => !EXCLUDED_DOMAIN_SET.has(d.toLowerCase().replace(/^www\./, "")));
-      return filtered.length > 0 ? filtered : domains;
+    if (!response?.choices[0].message.content) {
+      throw new Error("Target search failed: the AI returned an empty response when asked to extract domains from the search results.");
     }
+
+    const text = response.choices[0].message.content.trim();
+    const parsed = JSON.parse(text);
+
+    // There is deliberately no hardcoded domain list here. This used to read
+    //   parsed.domains || ["vercel.com", "stripe.com", "linear.app"]
+    // so a model response missing its "domains" key produced three plausible
+    // companies and the run reported success — a broken run was
+    // indistinguishable from a working one. A malformed response is a
+    // failure; say so and let the caller mark the AgentRun FAILED.
+    if (!Array.isArray(parsed.domains)) {
+      throw new Error(`Target search failed: the AI response contained no "domains" array. Keys received: ${Object.keys(parsed).join(", ") || "none"}.`);
+    }
+
+    const domains: string[] = parsed.domains;
+    // Deterministic final filter — doesn't rely on the AI actually honoring
+    // the "don't include X" instruction in the prompt, since instructions
+    // can occasionally be missed. A plain Set lookup can't be.
+    const filtered = domains.filter(d => !EXCLUDED_DOMAIN_SET.has(d.toLowerCase().replace(/^www\./, "")));
+    return filtered.length > 0 ? filtered : domains;
   } catch (error) {
+    // No fake-domain fallback here either. Previously every failure in this
+    // function — dead Groq key, network drop, unparseable JSON — was
+    // swallowed and the same three domains were returned, so the run looked
+    // successful. Log the real reason, then rethrow: runDiscoveryEngine's
+    // handler writes it to the activity log and marks the AgentRun FAILED.
     console.error("AI Search Error:", error);
+    throw new Error(`Target search failed: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return ["vercel.com", "stripe.com", "linear.app"];
 }

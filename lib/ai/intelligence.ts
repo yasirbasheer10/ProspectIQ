@@ -109,14 +109,23 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
     const searchQuery = `"${company.name}" ${company.domain} recent news OR site:linkedin.com/in/ "${company.name}" (CEO OR Founder OR VP OR Director)`;
     const searchData = await performSearch(searchQuery);
     
-    // Fallback to mock search string if Serper fails or has no key
-    let searchContext = "";
-    if (searchData && searchData.organic) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      searchContext = searchData.organic.map((res: any) => `Title: ${res.title}\nSnippet: ${res.snippet}\nLink: ${res.link}`).join('\n\n');
-    } else {
-      searchContext = await performMockSearch(company.name, company.domain || "");
+    // No mock-search fallback. performMockSearch() used to fabricate a funding
+    // round, an expansion story and two named people with invented email
+    // addresses whenever Serper was unavailable — and the model then extracted
+    // those people into the Contact table as real buyers, while the prompt
+    // below was busy telling it not to hallucinate exactly such names. If the
+    // search produced nothing there is no source material to research, so fail
+    // with the real reason and let the handler mark this AgentRun FAILED.
+    if (!searchData || !Array.isArray(searchData.organic) || searchData.organic.length === 0) {
+      throw new Error(
+        `Web search returned no results for ${company.name} (${company.domain || "no domain"}). ` +
+        `Serper is missing SERPER_API_KEY, failing, or matched nothing — see the search error logged above. ` +
+        `Cannot research a company with no source material.`
+      );
     }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let searchContext: string = searchData.organic.map((res: any) => `Title: ${res.title}\nSnippet: ${res.snippet}\nLink: ${res.link}`).join('\n\n');
     
     // Sanitize context to prevent prompt injection
     searchContext = sanitizeText(searchContext);
@@ -330,37 +339,6 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
 // ─────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────
-
-async function performMockSearch(name: string, domain: string) {
-  // Simulating Serper.dev / web scraping results for speed and API key absence
-  // We use random realistic names to demonstrate the AI's extraction capabilities 
-  // without hardcoding the exact same names for every company.
-  
-  const firstNames = ["James", "Elena", "Michael", "Sarah", "David", "Jessica", "Robert", "Jennifer", "William", "Amanda", "Richard", "Melissa", "Thomas", "Laura", "Charles", "Stephanie"];
-  const lastNames = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas"];
-  const roles = ["VP of Sales", "Chief Technology Officer", "Director of Revenue", "Head of Growth", "Chief Marketing Officer", "VP of Engineering"];
-  
-  // Use company name length/chars to deterministically pick names so they stay consistent for the same company
-  const hash = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  
-  const fn1 = firstNames[hash % firstNames.length];
-  const ln1 = lastNames[(hash * 2) % lastNames.length];
-  const role1 = roles[(hash * 3) % roles.length];
-  
-  const fn2 = firstNames[(hash * 4) % firstNames.length];
-  const ln2 = lastNames[(hash * 5) % lastNames.length];
-  const role2 = roles[(hash * 6) % roles.length];
-
-  return `
-    Company: ${name} (${domain})
-    Recent News: The company recently announced a major expansion into European markets and is actively hiring for 20+ engineering and marketing roles. They just raised a Series B round of $30M.
-    Website Content: We provide enterprise-grade solutions for modern teams.
-    LinkedIn: High growth phase, several new leadership hires in Sales and Engineering.
-    Key Contacts Found: 
-    - ${fn1} ${ln1}, ${role1} (${fn1.toLowerCase()[0]}${ln1.toLowerCase()}@${domain})
-    - ${fn2} ${ln2}, ${role2}
-  `;
-}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildPrompt(company: any, searchContext: string) {
