@@ -47,6 +47,7 @@ The `ORCHESTRATOR` is a loop that walks companies through stages 2–4 automatic
 | Wrong AI model / model errors | `lib/ai/gemini.ts` — **this file is Groq, not Gemini** |
 | Auto-pilot stalls or loops | `lib/ai/orchestrator.ts` |
 | Login / signup / Google / LinkedIn | `lib/auth.ts` |
+| Redirects for logged-out / logged-in users | `proxy.ts` — **this is Next 16's middleware file** |
 | "Workspace missing" errors | `lib/session.ts` |
 | Database connection errors | `lib/db.ts` and `prisma.config.ts` |
 | Add or change a database field | `prisma/schema.prisma`, then run `npx prisma db push` |
@@ -70,15 +71,26 @@ lib/              all the real logic (18 files) — see table above
 prisma/           schema.prisma — 24 tables, 11 enums
 __tests__/        3 test files — scoring, demo fixtures, utils
 scripts/          save.ps1 and undo.ps1 (your deploy + rollback)
+proxy.ts          runs before every matched request — see note below
 ProspectIQ-Landing-Page/   separate static marketing page, not wired into the app
 ```
+
+### `proxy.ts` — don't delete this, it's live
+
+In Next.js 16 the file that used to be called `middleware.ts` is now called `proxy.ts`. So this
+file is real code that runs on every matching request, before any page does. It does two things:
+sends logged-out visitors from `/dashboard/...` to `/login`, and sends logged-in visitors away from
+the login/signup/forgot-password/reset-password pages to `/dashboard`.
+
+Its `matcher` currently only covers `/dashboard`, so the other sixteen logged-in pages rely on the
+check in `app/(app)/layout.tsx` instead. Widening that matcher is the cheapest way to cover them.
+
+Every page is a server component that queries Prisma directly — there is no REST API layer for
+app data. Buttons call server actions in the sibling `actions.ts`.
 
 Pages in `(app)/`: dashboard, discovery, companies, companies/[id], opportunities, contacts,
 outreach, conversations, sequences, analytics, agents, agents/[id], agents/[id]/settings,
 agent-activity, deploy, settings, profile.
-
-Every page is a server component that queries Prisma directly — there is no REST API layer for
-app data. Buttons call server actions in the sibling `actions.ts`.
 
 ---
 
@@ -129,9 +141,11 @@ Listed worst-first. None are fixed yet except the build script.
 8. **Fixed:** the build script used to run `prisma db push --accept-data-loss` on every Vercel
    deploy, which could drop columns from the live database without asking. Now it's just
    `prisma generate && next build`.
-9. **Loose scratch files in the root** — `test-groq.js`, `test-groq-list.js`, `test-groq-model.js`,
-   `scratch_serper.ts`, `test.ts`, `test-db.ts`, `test-dashboard.ts`, `test-intelligence.ts`,
-   `proxy.ts`, `prospectiq-fixes-1-4.patch`, `supabase_migration.sql`. Safe to delete.
+9. **Fixed:** ten loose scratch files that used to sit in the root (`test-groq.js`,
+   `test-groq-list.js`, `test-groq-model.js`, `scratch_serper.ts`, `test.ts`, `test-db.ts`,
+   `test-dashboard.ts`, `test-intelligence.ts`, `prospectiq-fixes-1-4.patch`,
+   `supabase_migration.sql`) were deleted on 2026-08-22. They're all still in git history if one
+   is ever needed back. **`proxy.ts` was deliberately kept** — see the note below; it is live code.
 10. **Tests only cover scoring, demo fixtures and utils.** Nothing tests discovery, intelligence,
     outreach or auth.
 

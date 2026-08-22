@@ -1,1 +1,0 @@
-import DashboardPage from "./app/(app)/dashboard/page"; import { getSession } from "@/lib/session"; console.log(DashboardPage.toString());
