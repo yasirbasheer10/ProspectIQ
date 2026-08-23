@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import { prisma } from "@/lib/db";
+import { logActivity } from "@/lib/activity";
 import { ai } from "./gemini";
 import { performSearch } from "./search";
 import { sanitizeText } from "./intelligence";
@@ -138,7 +139,7 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
             }
           });
 
-          await logActivity("COMPANY_DISCOVERED", `Discovered ${company.name}`, `Added to target list. Industry: ${company.industry}`);
+          await logActivity(workspaceId, "COMPANY_DISCOVERED", `Discovered ${company.name}`, `Added to target list. Industry: ${company.industry}`);
 
           // Save Signals
           if (extractedData.signals && extractedData.signals.length > 0) {
@@ -157,10 +158,10 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
                 }
               });
             }
-            await logActivity("SIGNAL_DETECTED", `Found ${extractedData.signals.length} Signals`, `Detected buying signals for ${company.name}.`);
+            await logActivity(workspaceId, "SIGNAL_DETECTED", `Found ${extractedData.signals.length} Signals`, `Detected buying signals for ${company.name}.`);
           }
         } else {
-          await logActivity("SCRAPE_FAILED", `Could not analyze ${domain}`, `Failed to extract meaningful firmographic data.`);
+          await logActivity(workspaceId, "SCRAPE_FAILED", `Could not analyze ${domain}`, `Failed to extract meaningful firmographic data.`);
         }
 
         // Increment processed items
@@ -171,7 +172,7 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
 
       } catch (err: unknown) {
         console.error(`Failed to process domain ${domain}:`, err);
-        await logActivity("SCRAPE_FAILED", `Error analyzing ${domain}`, err instanceof Error ? err.message : "Unknown error");
+        await logActivity(workspaceId, "SCRAPE_FAILED", `Error analyzing ${domain}`, err instanceof Error ? err.message : "Unknown error");
       }
     };
 
@@ -189,12 +190,12 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
       data: { status: "COMPLETED", completedAt: new Date() }
     });
     
-    await logActivity("RUN_COMPLETE", "Discovery Run Completed", `Successfully finished processing ${domainsToScrape.length} targets.`);
+    await logActivity(workspaceId, "RUN_COMPLETE", "Discovery Run Completed", `Successfully finished processing ${domainsToScrape.length} targets.`);
 
   } catch (error: unknown) {
     const reason = error instanceof Error ? error.message : "An unexpected error occurred.";
     console.error("Discovery Engine Error:", error);
-    await logActivity("RUN_ERROR", "Discovery Run Failed", reason);
+    await logActivity(workspaceId, "RUN_ERROR", "Discovery Run Failed", reason);
     // Record the reason on the run itself, not just in the console and the
     // activity feed — researchCompany already does this, and without it a
     // FAILED discovery run carries no explanation anywhere queryable.
@@ -206,20 +207,6 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
 }
 
 // ─── Helpers ───────────────────────────────────────────────────
-
-async function logActivity(...args: string[]) {
-  const type = args.length === 4 ? args[1] : args[0];
-  const title = args.length === 4 ? args[2] : args[1];
-  const description = args.length === 4 ? args[3] : args[2];
-
-  return prisma.activity.create({
-    data: {
-      type,
-      title,
-      description
-    }
-  });
-}
 
 const companySchemaDefinition = `
 {

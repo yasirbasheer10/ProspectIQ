@@ -5,11 +5,10 @@ import { Button } from "@/components/ui/Button";
 import { Filter, ChevronRight, User, Briefcase, Zap, Building } from "lucide-react";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/session";
+import { requireWorkspaceId } from "@/lib/session";
 
 export default async function OpportunitiesPage() {
-  const session = await getSession();
-  const workspaceId = session?.workspaceId || "demo";
+  const workspaceId = await requireWorkspaceId();
 
   const opportunities = await prisma.opportunity.findMany({
     where: { workspaceId },

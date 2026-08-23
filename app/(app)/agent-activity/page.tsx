@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/session";
+import { requireWorkspaceId } from "@/lib/session";
 import { sweepStaleRuns } from "@/lib/ai/stale-runs";
 import { formatDistanceToNow } from "date-fns";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -17,8 +17,7 @@ function getIconForActivityType(type: string) {
 }
 
 export default async function AgentActivityPage() {
-  const session = await getSession();
-  const workspaceId = session?.workspaceId || "demo";
+  const workspaceId = await requireWorkspaceId();
 
   // Correct any run that died without writing a terminal status before we read
   // it — otherwise this page shows a permanent "Now Executing" card for a run
@@ -35,6 +34,9 @@ export default async function AgentActivityPage() {
   });
 
   const activities = await prisma.activity.findMany({
+    // This findMany had no `where` at all, so every workspace saw every other
+    // workspace's agent log — company names, contact names and error messages.
+    where: { workspaceId },
     orderBy: { createdAt: 'desc' },
     take: 50 // limit for UI
   });

@@ -15,7 +15,7 @@ export async function getSession() {
 
   // Fetch the first workspace the user belongs to
   const userWithWorkspaces = await prisma.user.findUnique({
-    where: { id: (session.user as any).id },
+    where: { id: session.user.id },
     include: {
       workspaces: {
         take: 1,
@@ -27,7 +27,7 @@ export async function getSession() {
 
   // Auto-provision a default workspace if they skipped onboarding
   if (!workspaceId) {
-    const userId = (session.user as any).id;
+    const userId = session.user.id;
     const defaultWorkspace = await prisma.workspace.create({
       data: {
         name: "My Workspace",
@@ -49,3 +49,43 @@ export async function getSession() {
   };
 }
 
+/**
+ * Thrown when a caller has no usable session. Server actions and pages should
+ * let this propagate — Next renders the nearest `error.tsx` for a page, and a
+ * server action returns it to the caller as a rejected promise.
+ */
+export class NotSignedInError extends Error {
+  constructor() {
+    super("You are not signed in, or your session has expired. Please sign in again.");
+    this.name = "NotSignedInError";
+  }
+}
+
+/**
+ * The only way pages and server actions should obtain a workspace.
+ *
+ * Every caller used to write `session?.workspaceId || "demo"`, which turned a
+ * missing session into queries against a workspace named `"demo"` that does not
+ * exist. Those queries succeed and return nothing, so an auth failure rendered
+ * as an empty dashboard rather than an error — and any write went to a
+ * workspace the user does not own. This throws instead.
+ */
+export async function requireSession() {
+  const session = await getSession();
+  if (!session?.user?.id || !session.workspaceId) {
+    throw new NotSignedInError();
+  }
+  // Re-assert workspaceId as non-optional for callers.
+  return { ...session, workspaceId: session.workspaceId };
+}
+
+export async function requireWorkspace(): Promise<{ userId: string; workspaceId: string }> {
+  const session = await requireSession();
+  return { userId: session.user.id, workspaceId: session.workspaceId };
+}
+
+/** Shorthand for the common case of only needing the workspace. */
+export async function requireWorkspaceId(): Promise<string> {
+  const { workspaceId } = await requireWorkspace();
+  return workspaceId;
+}

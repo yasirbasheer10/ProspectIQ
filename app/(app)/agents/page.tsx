@@ -3,11 +3,10 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { AgentFleetClient } from "./AgentFleetClient";
 
-import { getSession } from "@/lib/session";
+import { requireWorkspaceId } from "@/lib/session";
 
 export default async function AgentsPage() {
-  const session = await getSession();
-  const workspaceId = session?.workspaceId || "demo";
+  const workspaceId = await requireWorkspaceId();
 
   const agents = await prisma.customAgent.findMany({
     where: { workspaceId },

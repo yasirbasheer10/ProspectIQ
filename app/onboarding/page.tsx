@@ -51,7 +51,7 @@ export default function OnboardingPage() {
             Welcome to ProspectIQ
           </h1>
           <p className="text-[15px] text-[#747780]">
-            Let's configure your AI agent.
+            Let&apos;s configure your AI agent.
           </p>
         </div>
 

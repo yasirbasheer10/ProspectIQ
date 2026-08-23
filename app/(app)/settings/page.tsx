@@ -1,24 +1,21 @@
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/session";
+import { requireWorkspaceId } from "@/lib/session";
 import { SettingsClient } from "./SettingsClient";
 
 export default async function SettingsPage() {
-  const session = await getSession();
-  let workspace = null;
-  let icp = null;
-  let offer = null;
+  // Was `if (session) { ... }`, so a signed-out visitor got the settings form
+  // with every field blank and a demo-mode toggle defaulted to on.
+  const workspaceId = await requireWorkspaceId();
 
-  if (session) {
-    workspace = await prisma.workspace.findUnique({
-      where: { id: session.workspaceId },
-    });
-    icp = await prisma.iCP.findFirst({
-      where: { workspaceId: session.workspaceId },
-    });
-    offer = await prisma.offer.findFirst({
-      where: { workspaceId: session.workspaceId },
-    });
-  }
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+  });
+  const icp = await prisma.iCP.findFirst({
+    where: { workspaceId },
+  });
+  const offer = await prisma.offer.findFirst({
+    where: { workspaceId },
+  });
 
   return (
     <SettingsClient

@@ -50,9 +50,16 @@ The `ORCHESTRATOR` is a loop that walks companies through stages 2–4 automatic
 | Auto-pilot stalls or loops | `lib/ai/orchestrator.ts` |
 | Login / signup / Google / LinkedIn | `lib/auth.ts` |
 | Redirects for logged-out / logged-in users | `proxy.ts` — **this is Next 16's middleware file** |
-| "Workspace missing" errors | `lib/session.ts` |
+| "Workspace missing" / "You are not signed in" errors | `lib/session.ts` — `requireWorkspaceId()` throws rather than falling back to a default workspace |
+| "Not found" on a record you can see in the database | `lib/authz.ts` — the `assertXInWorkspace` guards; a record in another workspace reports as missing on purpose |
+| Signup rejected with "too many attempts" | `lib/rate-limit.ts` (per-IP window) and `app/api/auth/register/route.ts` (per-email cooldown) |
+| Demo seed/reset returns 403 | `lib/api-guards.ts` — needs a JSON content-type, a matching `Origin`, and for reset the confirmation string |
+| An email won't send to a specific address | `lib/outreach/suppression.ts` — it may be suppressed |
+| Nothing in the Agent Activity feed | `lib/activity.ts` — the only writer; rows from before 2026-08-23 have no `workspaceId` and are hidden |
 | Database connection errors | `lib/db.ts` and `prisma.config.ts` |
+| `prisma db push` says the datasource url is required | you have no local `.env` — copy `.env.example` and fill it, or `npx vercel env pull .env.local` |
 | Add or change a database field | `prisma/schema.prisma`, then run `npx prisma db push` |
+| Which environment variables exist | `.env.example` — all 15, with required vs optional marked |
 | Emails not sending | `lib/email.ts` (Resend) |
 | Sidebar / nav | `components/layout/Sidebar.tsx`, `MobileNav.tsx` |
 | A page's data is wrong | that page's `page.tsx` — each one queries Prisma directly |
@@ -69,13 +76,30 @@ app/
   onboarding/     first-run wizard (ICP + Offer)
   api/            auth endpoints, health check, demo seed/reset
 components/       shared UI (11 files) — layout/ and ui/
-lib/              all the real logic (20 files) — see table above
+lib/              all the real logic (25 files) — see table above
 prisma/           schema.prisma — 24 tables, 11 enums
+types/            next-auth.d.ts — puts id/workspaceId/onboardingComplete on the session type
 __tests__/        3 test files — scoring, demo fixtures, utils
 scripts/          save.ps1 and undo.ps1 (your deploy + rollback)
 proxy.ts          runs before every matched request — see note below
+prisma.config.ts  resolves the database URL; reads .env / .env.local itself
+.env.example      template for the above — copy it, don't guess
 ProspectIQ-Landing-Page/   separate static marketing page, not wired into the app
 ```
+
+### Every request starts from the session
+
+No page or server action takes a `workspaceId` or `userId` from its caller — they were publicly
+callable HTTP endpoints doing so, which is why this changed on 2026-08-23. The three entry points,
+all in `lib/session.ts`:
+
+- `requireWorkspaceId()` — the common case; returns the workspace or throws.
+- `requireWorkspace()` — when you need the user id too.
+- `requireSession()` — when you need the rest of the session, e.g. the user's name.
+
+For anything reached by id, add the matching `assertXInWorkspace` from `lib/authz.ts`, or scope the
+write itself with `updateMany`/`deleteMany` on `workspaceId` and throw when `count === 0`. Don't read
+the record, check it, then write it — that's a race.
 
 ### `proxy.ts` — don't delete this, it's live
 
@@ -114,8 +138,8 @@ Hunter is only called when a company scores 70+, to protect the 50-credits/month
 
 ## Known problems found on 2026-08-22
 
-Listed worst-first. The whole P0 batch from `ARCHITECTURE-AUDIT.md` is now fixed (items 1, 2, 8, 9
-and the three new entries below); everything else is still open.
+Listed worst-first. The whole **P0 and P1** batches from `ARCHITECTURE-AUDIT.md` are now fixed
+(items 1–11 there); what's left is P2 — maintainability, tests, migrations.
 
 1. **Fixed 2026-08-22 — fake companies are no longer hardcoded.** `lib/ai/discovery.ts` used to
    return `["vercel.com", "stripe.com", "linear.app"]` in two places when the AI call failed, so a
@@ -128,14 +152,19 @@ and the three new entries below); everything else is still open.
    and the AI then saved them as real contacts. The function is deleted; `researchCompany` now
    throws when the search returns no results, which marks the run **FAILED** and shows the reason
    on the company page.
-3. **8 of 13 action files never check who is logged in.** Anything in `contacts`, `outreach`,
-   `profile`, `conversations`, `deploy`, `agents` and `companies/[id]` will act on any record ID
-   it's handed. `triggerIntelligenceRun(companyId, workspaceId)` takes the workspace from the
-   browser instead of the session. Only matters once someone else uses the app — but it's the
-   kind of thing that's much cheaper to fix now.
-4. **Activity log isn't linked to anything.** The `Activity` table has no `workspaceId` column, and
-   `logActivity()` in `discovery.ts` accepts either 3 or 4 arguments and throws the workspace away.
-   So the activity feed is global, not per-workspace.
+3. **Fixed 2026-08-23 — every action checks who is logged in.** 8 of 13 action files used to act on
+   any record id they were handed, and `triggerIntelligenceRun(companyId, workspaceId)` took the
+   workspace from the browser. Server actions are public HTTP endpoints, so that was the real hole,
+   not a theoretical one. Identity now comes from `lib/session.ts` and ownership from `lib/authz.ts`
+   — see "Every request starts from the session" above. The clearest case was `profile/page.tsx`,
+   which loaded whichever user had `isDemo: true` rather than the signed-in one, so every account
+   shared a single profile record.
+4. **Fixed 2026-08-23 — the activity log is scoped to a workspace.** `Activity` now has a
+   `workspaceId` and `lib/activity.ts` is the only writer. The feed's query had no `where` clause at
+   all, so every workspace read every other one's activity — including company names, contact names
+   and error text — and clearing the log deleted all workspaces' rows, not just yours. Rows written
+   before this date have a null `workspaceId` and appear in no feed; nothing recorded which workspace
+   they belonged to, so there's nothing to backfill from.
 5. **A whole unused AI system.** `lib/ai/providers.ts` and `lib/ai/provider.ts` define
    `getAIProvider()`, `DemoAIProvider` and `OpenAIProvider`. Nothing outside those two files uses
    them. `AI_PROVIDER`, `OPENAI_API_KEY` and `DEMO_MODE` mostly exist for this dead code.
@@ -170,8 +199,20 @@ and the three new entries below); everything else is still open.
     pipeline still has nowhere durable to run.
 13. **Fixed 2026-08-23 — the register route no longer returns raw errors.** It used to reply
     `Debug Error: ${error.message}`, handing database and stack text to any client. It now logs
-    server-side and returns *"Could not create your account. Please try again."* Registration is
-    still unthrottled (audit P1 item 10).
+    server-side and returns *"Could not create your account. Please try again."*
+14. **Fixed 2026-08-23 — registration is throttled.** 5 attempts per IP per 15 minutes (in memory,
+    `lib/rate-limit.ts`) plus a 2-minute per-email cooldown read from `VerificationToken`, which is
+    the durable half — the in-memory window is per serverless instance and resets on every cold
+    start, so on its own it's bypassed by rotating IPs.
+15. **Fixed 2026-08-23 — `researchCompany` is transactional and idempotent.** Its writes used to
+    land one at a time, so a failure halfway left a company with evidence but no opportunity, and
+    re-running it duplicated everything. The writes are now one `$transaction` and re-runs dedupe on
+    natural keys instead of inserting again. The Hunter.io call sits outside the transaction on
+    purpose — an HTTP call inside one holds a pooled connection open for its whole duration.
+16. **Fixed 2026-08-23 — the demo endpoints can't be triggered from another site.** `/api/demo/reset`
+    wiped a workspace on any POST. It now needs a JSON content-type, a matching `Origin`, and the
+    literal confirmation string; `/api/demo/seed` needs the first two. Neither returns the internal
+    error text any more.
 
 ---
 
@@ -191,3 +232,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\undo.ps1
 
 Schema changes are separate and deliberate: `npx prisma db push` after editing
 `prisma/schema.prisma`. Never put database commands back into the build script.
+
+**When a change touches both code and schema, push the schema first.** Vercel deploys the moment
+`save.ps1` pushes, so if the code lands before the column exists, the live site runs new code against
+an old database and throws until you catch up. Order: `npx prisma db push`, check the site still
+works, then `save.ps1`.
+
+`db push` needs a local `.env` or `.env.local` — the URL is not read from Vercel. If it fails with
+*"The datasource.url property is required"*, that file is missing. Copy `.env.example`, or run
+`npx vercel link` then `npx vercel env pull .env.local`.

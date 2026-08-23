@@ -1,12 +1,11 @@
-import { getSession } from "@/lib/session";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { prisma } from "@/lib/db";
+import { requireWorkspaceId } from "@/lib/session";
 import { DeployAgentClient } from "./DeployAgentClient";
 
 export default async function DeployAgentPage() {
-  const session = await getSession();
-  const workspaceId = session?.workspaceId || "demo";
-  
-  // We'll pass workspaceId to the client to save it in db
-  return <DeployAgentClient workspaceId={workspaceId} />;
+  // Called for its side effect: it throws if there's no session, so the page
+  // can't render its form for a signed-out visitor. The workspace itself is
+  // read by the server action, not passed through the browser.
+  await requireWorkspaceId();
+
+  return <DeployAgentClient />;
 }

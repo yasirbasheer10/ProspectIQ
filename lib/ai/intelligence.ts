@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { ai } from "./gemini";
 import { performSearch } from "./search";
 import { IntelligenceSchema, parseAIResponse } from "./schemas";
+import { STALE_RUN_TIMEOUT_MS } from "./stale-runs";
 import { calculateOpportunityScore, type ScoreInput } from "@/lib/scoring/opportunity-score";
 
 type IntelligenceOutput = z.infer<typeof IntelligenceSchema>;
@@ -90,6 +91,37 @@ const intelligenceSchemaDefinition = `
 // ─────────────────────────────────────────────────────────────
 
 export async function researchCompany({ companyId, workspaceId }: IntelligenceParams) {
+  // 0. Ownership and duplicate-run guards, both before an AgentRun row exists.
+  //
+  //    This used to be `findUnique({ where: { id: companyId } })` further down,
+  //    with no reference to `workspaceId` at all — so a company id from another
+  //    workspace was researched happily, and the resulting Opportunity and
+  //    Contacts were written into the *caller's* workspace.
+  const company = await prisma.company.findFirst({
+    where: { id: companyId, workspaceId },
+    include: { workspace: { include: { offers: true, icps: true } } }
+  });
+
+  if (!company) throw new Error("That company was not found in your workspace.");
+
+  // Two concurrent researches of the same company would both pass every check
+  // below and write two of everything. `inputParams` records which company a
+  // run is for so an in-flight one can be found; runs older than the stale
+  // timeout are ignored because `sweepStaleRuns` is about to fail them anyway.
+  const inFlight = await prisma.agentRun.findFirst({
+    where: {
+      workspaceId,
+      type: "RESEARCH",
+      status: { in: ["QUEUED", "RUNNING"] },
+      inputParams: { path: ["companyId"], equals: companyId },
+      updatedAt: { gt: new Date(Date.now() - STALE_RUN_TIMEOUT_MS) }
+    }
+  });
+
+  if (inFlight) {
+    throw new Error(`Research is already running for ${company.name}. Wait for it to finish before starting another.`);
+  }
+
   // 1. Create AgentRun Trace
   const run = await prisma.agentRun.create({
     data: {
@@ -99,17 +131,11 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
       startedAt: new Date(),
       title: "Opportunity Intelligence",
       description: `Analyzing company ID: ${companyId}`,
+      inputParams: { companyId },
     }
   });
 
   try {
-    const company = await prisma.company.findUnique({
-      where: { id: companyId },
-      include: { workspace: { include: { offers: true, icps: true } } }
-    });
-
-    if (!company) throw new Error("Company not found");
-
     // 2. Perform Real Web Search using Serper!
     const searchQuery = `"${company.name}" ${company.domain} recent news OR site:linkedin.com/in/ "${company.name}" (CEO OR Founder OR VP OR Director)`;
     const searchData = await performSearch(searchQuery);
@@ -175,49 +201,72 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
     const scoreInput = mapAIOutputToScoreInput(data);
     const scores = calculateOpportunityScore(scoreInput);
 
-    // 5. Store VERIFIED EVIDENCE
-    const savedEvidence = [];
-    for (const ev of data.evidence) {
-      const created = await prisma.evidence.create({
-        data: {
-          companyId,
-          title: ev.title,
-          summary: ev.summary ?? "",
-          quote: ev.quote || "",
-          // No invented citation. This used to fall back to a Google search URL
-          // for the company name, which reads like a source but proves nothing —
-          // the column is nullable, so an uncited fact stays visibly uncited.
-          sourceUrl: ev.sourceUrl || null,
-          sourceName: ev.sourceName || "Web Search",
-          sourceType: ev.sourceType || "web",
-          isVerified: false // MUST NOT blindly trust AI verification
-        }
-      });
-      savedEvidence.push(created);
-    }
+    // 5–8 and 10. One transaction.
+    //
+    // These five write steps used to run as five loose sequences of `create`
+    // calls. Anything that threw partway — a bad enum, a dropped connection, a
+    // serverless timeout — left the company with evidence and signals but no
+    // opportunity, or an opportunity with no score, and the AgentRun marked
+    // FAILED next to data that had in fact been committed. Now either all of it
+    // lands or none of it does.
+    //
+    // Each insert is deduplicated on a natural key so re-running research tops
+    // the company up instead of writing a second copy of everything. There are
+    // no unique constraints backing this — adding them needs migrations, which
+    // is P2 item 19 — so the checks are explicit queries inside the transaction.
+    const opportunity = await prisma.$transaction(async (tx) => {
+      // 5. Store VERIFIED EVIDENCE
+      for (const ev of data.evidence) {
+        const duplicate = await tx.evidence.findFirst({
+          where: { companyId, title: ev.title }
+        });
+        if (duplicate) continue;
 
-    // 6. Store AI INFERENCE (Signals)
-    for (const sig of data.signals) {
-      await prisma.signal.create({
-        data: {
-          companyId,
-          type: sig.type, // Already narrowed to a valid SignalType by the schema
-          title: sig.title,
-          description: sig.description,
-          sourceName: sig.source || "AI Inference",
-          // Not scored. This was hardcoded to 0.8, which made every signal look
-          // equally and confidently relevant; nothing computes a real value yet.
-          relevance: null
-        }
-      });
-    }
+        await tx.evidence.create({
+          data: {
+            companyId,
+            title: ev.title,
+            summary: ev.summary ?? "",
+            quote: ev.quote || "",
+            // No invented citation. This used to fall back to a Google search URL
+            // for the company name, which reads like a source but proves nothing —
+            // the column is nullable, so an uncited fact stays visibly uncited.
+            sourceUrl: ev.sourceUrl || null,
+            sourceName: ev.sourceName || "Web Search",
+            sourceType: ev.sourceType || "web",
+            isVerified: false // MUST NOT blindly trust AI verification
+          }
+        });
+      }
 
-    // 7. Store Opportunity & Scores
-    const opportunity = await prisma.opportunity.create({
-      data: {
-        companyId,
-        workspaceId,
-        status: "NEW",
+      // 6. Store AI INFERENCE (Signals)
+      for (const sig of data.signals) {
+        const duplicate = await tx.signal.findFirst({
+          where: { companyId, type: sig.type, title: sig.title }
+        });
+        if (duplicate) continue;
+
+        await tx.signal.create({
+          data: {
+            companyId,
+            type: sig.type, // Already narrowed to a valid SignalType by the schema
+            title: sig.title,
+            description: sig.description,
+            sourceName: sig.source || "AI Inference",
+            // Not scored. This was hardcoded to 0.8, which made every signal look
+            // equally and confidently relevant; nothing computes a real value yet.
+            relevance: null
+          }
+        });
+      }
+
+      // 7. Store Opportunity & Scores
+      //
+      // Reuse the one a previous research run left behind if the user hasn't
+      // acted on it yet. Once it leaves NEW it represents real pipeline history
+      // — an approval, a rejection, a conversation — so a re-run adds a new one
+      // beside it rather than overwriting that.
+      const narrative = {
         problemStatement: data.problems?.join("\n") || "",
         whyNow: data.why_now,
         opportunitySummary: data.reasoning,
@@ -225,29 +274,65 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
         aiConfidence: data.confidence,
         recommendedService: data.recommended_offer,
         recommendedBuyerRole: data.buyer_role,
-        score: {
-          create: {
-            icpFitScore: scores.icpFit,
-            problemEvidenceScore: scores.problemEvidence,
-            buyingIntentScore: scores.buyingIntent,
-            serviceMatchScore: scores.serviceMatch,
-            buyerConfidenceScore: scores.buyerConfidence,
-            contactabilityScore: scores.contactability,
-            overallScore: scores.overall
-          }
-        }
-      }
-    });
+      };
+      const scoreFields = {
+        icpFitScore: scores.icpFit,
+        problemEvidenceScore: scores.problemEvidence,
+        buyingIntentScore: scores.buyingIntent,
+        serviceMatchScore: scores.serviceMatch,
+        buyerConfidenceScore: scores.buyerConfidence,
+        contactabilityScore: scores.contactability,
+        overallScore: scores.overall,
+      };
 
-    // 8. Store Decision Makers
-    if (data.decision_makers && data.decision_makers.length > 0) {
-      for (const dm of data.decision_makers) {
-        await prisma.contact.create({
+      const reusable = await tx.opportunity.findFirst({
+        where: { companyId, workspaceId, status: "NEW" },
+        orderBy: { createdAt: "desc" }
+      });
+
+      let opp;
+      if (reusable) {
+        opp = await tx.opportunity.update({
+          where: { id: reusable.id },
+          data: narrative
+        });
+        await tx.opportunityScore.upsert({
+          where: { opportunityId: opp.id },
+          create: { opportunityId: opp.id, ...scoreFields },
+          update: scoreFields
+        });
+      } else {
+        opp = await tx.opportunity.create({
+          data: {
+            companyId,
+            workspaceId,
+            status: "NEW",
+            ...narrative,
+            score: { create: scoreFields }
+          }
+        });
+      }
+
+      // 8. Store Decision Makers
+      for (const dm of data.decision_makers ?? []) {
+        const fullName = dm.name && dm.name !== "Unknown" && dm.name !== ""
+          ? dm.name
+          : `[Target] ${dm.role}`;
+
+        // An email identifies a person; without one, the name has to.
+        const duplicate = await tx.contact.findFirst({
+          where: dm.email
+            ? { companyId, email: dm.email }
+            : { companyId, fullName }
+        });
+        if (duplicate) continue;
+
+        await tx.contact.create({
           data: {
             workspaceId,
             companyId,
-            opportunityId: opportunity.id,
-            fullName: dm.name && dm.name !== "Unknown" && dm.name !== "" ? dm.name : `[Target] ${dm.role}`,
+            opportunityId: opp.id,
+            fullName,
             title: dm.role,
             email: dm.email || null,
             linkedinUrl: dm.linkedin_url || null,
@@ -257,10 +342,37 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
           }
         });
       }
-    }
+
+      // 10. Update Company
+      await tx.company.update({
+        where: { id: companyId },
+        data: {
+          businessModel: data.business_model,
+          description: data.company_summary,
+          status: "RESEARCHED",
+          researchedAt: new Date(),
+          researchScore: scores.overall,
+          scoreGrade: scores.grade
+        }
+      });
+
+      return opp;
+    }, {
+      // The default 5s is too tight: the loops above issue a dedupe query per
+      // evidence item, signal and contact, and the model can return a dozen of
+      // each. Nothing in here makes a network call, so the ceiling is database
+      // round-trips, not third-party latency.
+      timeout: 30_000
+    });
 
     // 9. Hunter.io Contact Enrichment — only for high-scoring leads (score >= 70)
-    //    to preserve the 50 credits/month free tier
+    //    to preserve the 50 credits/month free tier.
+    //
+    //    Deliberately outside the transaction above: it makes an HTTP request to
+    //    a third party, and holding a database transaction open across a network
+    //    call to a service that may be slow or down is how connection pools get
+    //    exhausted. It is also purely additive and already non-fatal, so it has
+    //    nothing to roll back.
     if (scores.overall >= 70 && company.domain) {
       try {
         const hunterKey = process.env.HUNTER_API_KEY;
@@ -308,20 +420,7 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
       }
     }
 
-    // 10. Update Company
-    await prisma.company.update({
-      where: { id: companyId },
-      data: {
-        businessModel: data.business_model,
-        description: data.company_summary,
-        status: "RESEARCHED",
-        researchedAt: new Date(),
-        researchScore: scores.overall,
-        scoreGrade: scores.grade
-      }
-    });
-
-    // 10. Mark Run Completed
+    // 11. Mark Run Completed
     await prisma.agentRun.update({
       where: { id: run.id },
       data: {

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/session";
+import { requireWorkspaceId } from "@/lib/session";
 import { ContactsClient } from "./ContactsClient";
 
 export default async function ContactsPage({
@@ -7,8 +7,7 @@ export default async function ContactsPage({
 }: {
   searchParams: { q?: string; page?: string };
 }) {
-  const session = await getSession();
-  const workspaceId = session?.workspaceId || "demo";
+  const workspaceId = await requireWorkspaceId();
 
   const q = searchParams?.q || "";
   const page = parseInt(searchParams?.page || "1");

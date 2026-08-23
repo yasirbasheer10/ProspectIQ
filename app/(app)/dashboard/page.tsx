@@ -4,7 +4,7 @@ import { KpiCard } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/session";
+import { requireSession } from "@/lib/session";
 import { sweepStaleRuns } from "@/lib/ai/stale-runs";
 import {
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -25,11 +25,12 @@ import { DashboardActions } from "./DashboardActions";
 import { Greeting } from "@/components/ui/Greeting";
 
 export default async function DashboardPage() {
-  const session = await getSession();
-  const workspaceId = session?.workspaceId || "demo";
-  
+  // requireSession rather than requireWorkspaceId: this page also greets by name.
+  const session = await requireSession();
+  const workspaceId = session.workspaceId;
+
   let firstName = "there";
-  if (session?.user?.name) {
+  if (session.user?.name) {
     firstName = session.user.name.split(" ")[0];
   }
 

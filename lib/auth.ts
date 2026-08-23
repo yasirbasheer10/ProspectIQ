@@ -1,5 +1,6 @@
 import { PrismaAdapter } from "@auth/prisma-adapter"
 import { NextAuthOptions } from "next-auth"
+import type { Adapter } from "next-auth/adapters"
 import GoogleProvider from "next-auth/providers/google"
 import LinkedInProvider from "next-auth/providers/linkedin"
 import CredentialsProvider from "next-auth/providers/credentials"
@@ -7,7 +8,10 @@ import { prisma } from "@/lib/db"
 import bcrypt from "bcryptjs"
 
 export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(prisma) as any,
+  // The adapter's generated types don't line up with next-auth v4's Adapter
+  // interface; this is the documented seam between the two packages, not a
+  // shortcut around a type we control.
+  adapter: PrismaAdapter(prisma) as Adapter,
   session: {
     strategy: "jwt",
   },
@@ -72,20 +76,20 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user, trigger, session }) {
       if (user) {
         token.id = user.id
-        token.onboardingComplete = (user as any).onboardingComplete
+        token.onboardingComplete = user.onboardingComplete
       }
-      
+
       // Update session when onboarding completes
       if (trigger === "update" && session?.onboardingComplete !== undefined) {
         token.onboardingComplete = session.onboardingComplete
       }
-      
+
       return token
     },
     async session({ session, token }) {
       if (session.user) {
-        ;(session.user as any).id = token.id as string
-        ;(session.user as any).onboardingComplete = token.onboardingComplete
+        session.user.id = token.id as string
+        session.user.onboardingComplete = token.onboardingComplete
       }
       return session
     }

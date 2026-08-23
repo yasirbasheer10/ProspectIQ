@@ -20,7 +20,8 @@ export function ProfileClient({ user }: { user: any }) {
 
   const handleSave = () => {
     startTransition(async () => {
-      await updateUserProfile(user.id, formData);
+      // No user ID passed — the action takes identity from the session.
+      await updateUserProfile(formData);
       setIsSuccess(true);
       setTimeout(() => setIsSuccess(false), 3000);
     });

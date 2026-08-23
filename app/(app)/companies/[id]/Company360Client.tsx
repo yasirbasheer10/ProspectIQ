@@ -24,7 +24,8 @@ export function Company360Client({ company }: Company360ClientProps) {
 
   const handleRunIntelligence = () => {
     startTransition(async () => {
-      await triggerIntelligenceRun(company.id, company.workspaceId);
+      // Workspace comes from the session now, not from the page's props.
+      await triggerIntelligenceRun(company.id);
     });
   };
 

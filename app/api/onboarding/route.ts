@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
       return new Response(JSON.stringify({ error: "Missing required fields" }), { status: 400 })
     }
 
-    const userId = (session.user as any).id
+    const userId = session.user.id
 
     // Check if user already completed onboarding
     const user = await prisma.user.findUnique({ where: { id: userId } })

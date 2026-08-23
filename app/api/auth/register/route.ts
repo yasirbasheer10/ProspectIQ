@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs"
 import { z } from "zod"
 import { v4 as uuidv4 } from "uuid"
 import { sendVerificationEmail } from "@/lib/email"
+import { clientIp, rateLimit } from "@/lib/rate-limit"
 
 const registerSchema = z.object({
   firstName: z.string().min(2, "First name must be at least 2 characters"),
@@ -14,8 +15,32 @@ const registerSchema = z.object({
     .regex(/[0-9]/, "Password must contain at least one number"),
 })
 
+/** Registrations allowed per IP per window. */
+const MAX_PER_IP = 5
+const IP_WINDOW_MS = 15 * 60 * 1000
+
+/**
+ * Minimum gap between two verification emails to the same address.
+ *
+ * Enforced against the database rather than memory, so it holds across
+ * serverless instances and cold starts — unlike the IP limit above.
+ */
+const EMAIL_COOLDOWN_MS = 2 * 60 * 1000
+
 export async function POST(req: NextRequest) {
   try {
+    // Unauthenticated, creates a row and sends an email on every call. Without
+    // a limit, one loop mints unlimited users and burns the Resend quota (or
+    // uses this endpoint to mail a third party repeatedly).
+    const ip = clientIp(req.headers)
+    const limit = rateLimit(`register:${ip}`, MAX_PER_IP, IP_WINDOW_MS)
+    if (!limit.ok) {
+      return new Response(
+        JSON.stringify({ error: "Too many sign-up attempts. Please try again in a few minutes." }),
+        { status: 429, headers: { "Retry-After": String(limit.retryAfter) } }
+      )
+    }
+
     const body = await req.json()
     const { firstName, lastName, email, password } = registerSchema.parse(body)
 
@@ -26,6 +51,23 @@ export async function POST(req: NextRequest) {
 
     if (existingUser) {
       return new Response(JSON.stringify({ error: "Email already exists. Please log in." }), { status: 409 })
+    }
+
+    // Per-address cooldown. The IP limit above can be sidestepped by rotating
+    // addresses; this one can't, because it is keyed on the thing that actually
+    // receives the email.
+    const recentToken = await prisma.verificationToken.findFirst({
+      where: {
+        identifier: email,
+        createdAt: { gt: new Date(Date.now() - EMAIL_COOLDOWN_MS) },
+      },
+    })
+
+    if (recentToken) {
+      return new Response(
+        JSON.stringify({ error: "A verification email was just sent to that address. Please check your inbox." }),
+        { status: 429, headers: { "Retry-After": String(Math.ceil(EMAIL_COOLDOWN_MS / 1000)) } }
+      )
     }
 
     // Hash password
@@ -54,8 +96,8 @@ export async function POST(req: NextRequest) {
     // Send email
     await sendVerificationEmail(email, token)
 
-    return new Response(JSON.stringify({ 
-      success: true, 
+    return new Response(JSON.stringify({
+      success: true,
       message: "User created successfully. Please check your email to verify your account.",
       user: { id: user.id, email: user.email, name: user.name }
     }), { status: 201 })

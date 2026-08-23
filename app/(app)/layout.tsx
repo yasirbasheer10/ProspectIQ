@@ -11,7 +11,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     redirect("/login")
   }
 
-  const user = session.user as any
+  const user = session.user
   
   // If the user hasn't completed onboarding and we are NOT on the onboarding page
   // Note: we'll handle this purely in the middleware or here? 

@@ -124,11 +124,18 @@ string literals.
 
 ### What to improve
 
-**`Activity` is orphaned.** It has no `workspaceId`, and its only links (`companyId`,
+**~~`Activity` is orphaned.~~** ~~It has no `workspaceId`, and its only links (`companyId`,
 `conversationId`, lines 665 and 667) are both optional. Most rows are written with neither. The
 result is a global activity feed that cannot be scoped to a workspace, which is why
 `logActivity()` in `discovery.ts:193` accepts a workspace ID and silently throws it away — there
-is no column to put it in. Add `workspaceId` (indexed, cascading) and backfill.
+is no column to put it in. Add `workspaceId` (indexed, cascading) and backfill.~~
+**Done 2026-08-23** as P1 item 7. The column is `workspaceId String?` — **nullable deliberately**:
+adding a required column to a non-empty table means `prisma db push --accept-data-loss`, which drops
+the existing rows, and with no migrations that isn't a reversible thing to do. Pre-existing rows keep
+`null`, which is honest — nothing recorded which workspace they were for, so they belong to none and
+no longer appear in any feed. There is no backfill for the same reason: there is nothing to derive
+the value from. Tighten it to required when item 19 introduces migrations.
+
 
 **`OutreachMessage` has no `workspaceId`.** It's scoped only through `opportunity`, which is
 optional (line 577). So a message with a null `opportunityId` belongs to nobody. This also forces
@@ -152,11 +159,22 @@ watching, not worth splitting yet.
 
 **Connection handling is loose.** `lib/db.ts` hand-parses `DATABASE_URL` into host/port/user/
 password and sets `ssl: { rejectUnauthorized: false }`, disabling certificate verification.
-`prisma.config.ts` reads `.env` with a regex and appends `sslaccept=accept_invalid_certs` — that
+~~`prisma.config.ts` reads `.env` with a regex and~~ appends `sslaccept=accept_invalid_certs` — that
 is a MySQL/PlanetScale parameter and has no meaning for Postgres, which uses `sslmode`. Both work
 today by accident rather than intent. There are also four accepted names for the database URL
 (`DATABASE_URL`, `POSTGRES_URL`, `POSTGRES_PRISMA_URL`, `POSTGRES_URL_NON_POOLING`), which makes
 misconfiguration hard to diagnose.
+**Partly addressed 2026-08-23**, after `npx prisma db push` failed with Prisma's unhelpful "The
+datasource.url property is required in your Prisma config file". The cause was that regex: it
+matched only a *double-quoted* `DATABASE_URL`, only in `.env` and not `.env.local`, and ignored
+`POSTGRES_URL_NON_POOLING` in the file — so with no local env file it resolved `undefined` and
+passed it straight through. It's now a real line-by-line parser that reads both files, handles
+quoted and unquoted values, and throws a message naming the fix. The four accepted names remain, but
+the precedence is now explicit and commented: a push prefers the non-pooling URL, because DDL
+through the pooler in transaction mode either hangs or silently fails. The `sslaccept` parameter and
+`lib/db.ts`'s hand-parsing are both untouched — changing either risks the live connection for no
+correctness gain today.
+
 
 ---
 
@@ -603,12 +621,17 @@ newly listed as item 20 under P2 — the `"94%"` confidence placeholder and the 
 Intelligence Feed cards.**
 
 **Two — trust boundaries aren't enforced.** Two boundaries matter in this app: the browser and the
-language model. ~~Neither is checked.~~ Eight action files skip the session check and two take
-identity from their caller; no server action validates its input. ~~On the other side, LLM JSON is
+language model. ~~Neither is checked. Eight action files skip the session check and two take
+identity from their caller; no server action validates its input. On the other side, LLM JSON is
 parsed and written straight to the database with no schema. `zod` is installed and used in two auth
 routes — the tool is already there, just pointed at the least risky surface.~~
-**The model boundary was closed on 2026-08-23** — `lib/ai/schemas.ts` validates every response
-before any write. The browser boundary is still open and is now the whole of P1 items 5 and 6.
+**Both boundaries were closed on 2026-08-23.** The model side is `lib/ai/schemas.ts`, which
+validates every response before any write. The browser side is P1 items 5–7: identity now comes
+from the session in every action and page, ownership is checked by a workspace-scoped query in
+`lib/authz.ts`, and input is parsed with `zod`. The clearest illustration of what was wrong:
+`profile/page.tsx` didn't load the signed-in user at all — it fetched whichever `User` had
+`isDemo: true`, creating `demo@example.com` if none existed, so every account displayed and edited
+one shared record.
 
 **Three — long-running work has no home.** The core value of the product is a pipeline that takes
 minutes. It's started with an un-awaited promise inside a serverless request, checks no budget in
@@ -658,14 +681,67 @@ All four are done. Kept here as a record of what changed and where.
 
 **P1 — correctness and safety**
 
-5. Add `getSession()` plus an ownership check to the 8 unguarded action files; stop accepting
-   `workspaceId` and `userId` from the browser.
-6. Replace the 17 `|| "demo"` fallbacks with a thrown error.
-7. Add `workspaceId` to `Activity`; replace `logActivity`'s variadic signature with one explicit one.
-8. Wrap the `researchCompany` writes in `$transaction` and make it idempotent.
-9. Delete `/api/demo/reset` or gate it behind an explicit confirmation token.
-10. Rate-limit registration.
-11. Enforce `Suppression` in the send path before any real sending exists.
+All seven are done, on 2026-08-23. Kept here as a record of what changed and where.
+
+5. ~~Add `getSession()` plus an ownership check to the 8 unguarded action files; stop accepting
+   `workspaceId` and `userId` from the browser.~~
+   **Done.** Every server action now derives its workspace from the session via
+   `requireWorkspaceId()` (new in `lib/session.ts`, alongside `requireSession()` and
+   `requireWorkspace()`); no action takes `workspaceId` or `userId` as a parameter any more.
+   Ownership is enforced by `lib/authz.ts`, whose `assertXInWorkspace` helpers do a single
+   workspace-scoped query and throw `RecordNotFoundError` — so a foreign id is indistinguishable
+   from a missing one, and there's no check-then-write window. Writes that could be scoped directly
+   use `updateMany`/`deleteMany` with `workspaceId` in the `where` and throw when `count === 0`.
+   Input is validated with `zod` rather than trusted: `updateWorkspaceSettings(input: unknown)` was
+   the worst case, taking two `Record<string, any>` objects straight from the browser.
+6. ~~Replace the 17 `|| "demo"` fallbacks with a thrown error.~~
+   **Done.** All of them are gone, across 14 pages and action files; each now calls
+   `requireWorkspaceId()`, which throws `NotSignedInError` instead of silently serving another
+   workspace's data. `dashboard/page.tsx` uses `requireSession()` because it also needs the user's
+   name.
+7. ~~Add `workspaceId` to `Activity`; replace `logActivity`'s variadic signature with one explicit
+   one.~~
+   **Done, and it was worse than described.** The column is added (nullable — see section 2) and
+   `lib/activity.ts` is now the only writer, with `workspaceId` required. Two leaks were found while
+   doing it, both from the missing column: the Agent Activity page's `findMany` had **no `where`
+   clause at all**, so every workspace read every other workspace's activity titles — which embed
+   company and contact names and error messages — and `clearAuditLogsAction`'s `deleteMany` was
+   likewise unscoped, so one workspace clearing its log wiped everybody's. Both are scoped now.
+   `discovery.ts`'s variadic `logActivity(...args: string[])` is deleted and all 13 call sites pass
+   the workspace explicitly; `orchestrator.ts`'s `updateRunStep` and its pause/stop actions take it
+   too.
+8. ~~Wrap the `researchCompany` writes in `$transaction` and make it idempotent.~~
+   **Done.** Steps 5–8 and 10 run inside one `$transaction` with a 30s timeout; the Hunter.io call
+   is deliberately left outside it, because holding a transaction open across an HTTP call is how
+   you exhaust the connection pool. Idempotency is dedupe-on-insert by natural key — evidence by
+   `(companyId, title)`, signals by `(companyId, type, title)`, contacts by email and otherwise by
+   full name — and a re-run reuses the latest `NEW` opportunity via `update` + `upsert` on the score
+   instead of creating a second one. Deleting and re-inserting was considered and rejected:
+   `Evidence.isVerified` is a human-review flag, and `discovery.ts` writes signals for the same
+   company, so a delete would destroy another engine's work. No unique constraints back the dedupe
+   because that needs migrations — item 19. Two further holes were closed here: `researchCompany`
+   looked its company up with `findUnique({ where: { id } })` and so would happily research any
+   workspace's company, and `checkRunStatus` did the same with `AgentRun`, leaking any workspace's
+   `errorMessage`. Both are workspace-scoped `findFirst` calls now. There's also an in-flight guard,
+   so double-clicking Research doesn't start two runs against the same company.
+9. ~~Delete `/api/demo/reset` or gate it behind an explicit confirmation token.~~
+   **Done.** Both demo routes now go through `lib/api-guards.ts`: `assertSameOriginJson` requires an
+   `application/json` content-type (which an HTML form cannot send, so a cross-site form post can't
+   reach it) and requires the `Origin` host to match `Host`. Reset additionally requires
+   `requireConfirmation(req, "RESET MY WORKSPACE")` in the body, and both take their workspace from
+   the session rather than the caller. Neither returns `detail: message` to the client any more.
+10. ~~Rate-limit registration.~~
+    **Done.** Two layers, because either alone is weak: an in-memory fixed window in
+    `lib/rate-limit.ts` capping 5 attempts per IP per 15 minutes (returning 429 with `Retry-After`),
+    and — since that's per-serverless-instance and defeated by rotating IPs — a durable 2-minute
+    per-email cooldown read from `VerificationToken`. That's what the new
+    `VerificationToken.createdAt` is for. The in-memory limiter's doc comment says plainly that it
+    resets on cold start and is not a substitute for a shared store.
+11. ~~Enforce `Suppression` in the send path before any real sending exists.~~
+    **Done.** `lib/outreach/suppression.ts` exports `findSuppression` and `assertNotSuppressed`,
+    which throws `SuppressedRecipientError`. It's wired in ahead of the send path now, while that
+    path is still a stub — which is the whole point of doing it early: there's no window in which
+    real mail can go out to a suppressed address.
 
 **P2 — maintainability**
 
@@ -674,7 +750,12 @@ All four are done. Kept here as a record of what changed and where.
     unused dependencies. Rename `gemini.ts` to `groq.ts` and centralise the model constant.
     Do **not** delete `proxy.ts` — it is Next 16's middleware file.
 13. Test the engines with mocked LLM and Serper responses.
-14. Add `.gitattributes`, `.env.example`, and CI that runs lint, tests and build before deploy.
+14. Add `.gitattributes`, ~~`.env.example`~~, and CI that runs lint, tests and build before deploy.
+    **`.env.example` done 2026-08-23**, prompted by `db push` failing for want of a local env file.
+    It documents all 15 variables, which are required versus optional, what breaks when an optional
+    one is missing, and why a push needs the non-pooling URL. `.gitignore` gained `!.env.example` so
+    the template is committed while `.env*` stays ignored.
+
 15. Give the orchestrator a budget check and fix `take: 1000` versus its "up to 20" comment;
     implement or remove the no-op `FIND_BUYER` step.
 16. Split `DiscoveryClient.tsx`; fix `searchParams` typing on the two pages; fix `error.tsx`'s copy

@@ -1,4 +1,5 @@
 import { prisma } from "../db";
+import { logActivity } from "../activity";
 import { researchCompany } from "./intelligence";
 import { generateOutreach } from "./outreach";
 // Assuming discovery handles ICP -> Discovery
@@ -16,7 +17,7 @@ async function checkRunStatus(runId: string) {
   return true;
 }
 
-async function updateRunStep(runId: string, companyName: string, stepName: string, details?: string) {
+async function updateRunStep(runId: string, workspaceId: string, companyName: string, stepName: string, details?: string) {
   await prisma.agentRun.update({
     where: { id: runId },
     data: {
@@ -31,15 +32,13 @@ async function updateRunStep(runId: string, companyName: string, stepName: strin
   });
 
   // Log activity
-  await prisma.activity.create({
-    data: {
-      title: `${companyName}: ${stepName}`,
-      type: "ORCHESTRATOR_STEP",
-      description: details || "",
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      metadata: { stepName, details } as any
-    }
-  });
+  await logActivity(
+    workspaceId,
+    "ORCHESTRATOR_STEP",
+    `${companyName}: ${stepName}`,
+    details || "",
+    { metadata: { stepName, details: details || "" } },
+  );
 }
 
 export async function startOrchestratorRun(workspaceId: string) {
@@ -152,7 +151,7 @@ async function orchestratorLoop(runId: string, workspaceId: string) {
           const { thought, action, details } = reactOutput;
 
           // Update UI with the Agent's Thought and Action
-          await updateRunStep(runId, company.name, action, `[Thought: ${thought}] -> ${details}`);
+          await updateRunStep(runId, workspaceId, company.name, action, `[Thought: ${thought}] -> ${details}`);
           
           await delay(1000); // Small delay to avoid API limits
 
@@ -188,7 +187,7 @@ async function orchestratorLoop(runId: string, workspaceId: string) {
               const opp = updatedCompany.opportunities[0];
               const contact = updatedCompany.contacts[0];
               
-              await updateRunStep(runId, company.name, "DRAFT_OUTREACH", `Drafting real outreach for ${contact.fullName}...`);
+              await updateRunStep(runId, workspaceId, company.name, "DRAFT_OUTREACH", `Drafting real outreach for ${contact.fullName}...`);
               await generateOutreach(opp.id, contact.id);
               
               // Mark company as IN_OUTREACH
@@ -216,15 +215,13 @@ async function orchestratorLoop(runId: string, workspaceId: string) {
       } catch (companyError: unknown) {
         const errorMessage = companyError instanceof Error ? companyError.message : String(companyError);
         console.error(`Error processing company ${company.name}:`, errorMessage);
-        await prisma.activity.create({
-          data: {
-            title: `Failed processing ${company.name}`,
-            type: "ORCHESTRATOR_ERROR",
-            description: errorMessage,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            metadata: { error: errorMessage } as any
-          }
-        });
+        await logActivity(
+          workspaceId,
+          "ORCHESTRATOR_ERROR",
+          `Failed processing ${company.name}`,
+          errorMessage,
+          { companyId: company.id, metadata: { error: errorMessage } },
+        );
       }
     }
 
@@ -247,16 +244,21 @@ async function orchestratorLoop(runId: string, workspaceId: string) {
   }
 }
 
-export async function pauseOrchestratorRun(runId: string) {
-  return await prisma.agentRun.update({
-    where: { id: runId },
+// Both of these are reached from a server action that receives `runId` from the
+// browser, so the workspace is part of the `where` rather than checked first:
+// a run id belonging to someone else matches no row and the count tells us.
+export async function pauseOrchestratorRun(runId: string, workspaceId: string) {
+  const { count } = await prisma.agentRun.updateMany({
+    where: { id: runId, workspaceId },
     data: { status: "PAUSED" }
   });
+  if (count === 0) throw new Error("That run was not found in your workspace.");
 }
 
-export async function stopOrchestratorRun(runId: string) {
-  return await prisma.agentRun.update({
-    where: { id: runId },
+export async function stopOrchestratorRun(runId: string, workspaceId: string) {
+  const { count } = await prisma.agentRun.updateMany({
+    where: { id: runId, workspaceId },
     data: { status: "CANCELLED", completedAt: new Date() }
   });
+  if (count === 0) throw new Error("That run was not found in your workspace.");
 }

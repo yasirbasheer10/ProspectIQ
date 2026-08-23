@@ -256,10 +256,10 @@ export function DiscoveryClient({ icp }: { icp: any }) {
         setRunIdToPoll(res.runId);
       }
       
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(e);
       setIsScanning(false);
-      setErrorMsg(e?.message || "An unexpected error occurred while starting discovery.");
+      setErrorMsg(e instanceof Error ? e.message : "An unexpected error occurred while starting discovery.");
     }
   };
 

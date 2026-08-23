@@ -5,11 +5,10 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { GitBranch, Plus, ChevronRight } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/session";
+import { requireWorkspaceId } from "@/lib/session";
 
 export default async function SequencesPage() {
-  const session = await getSession();
-  const workspaceId = session?.workspaceId || "demo";
+  const workspaceId = await requireWorkspaceId();
 
   const sequences = await prisma.sequence.findMany({
     where: { workspaceId },

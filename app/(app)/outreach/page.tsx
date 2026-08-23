@@ -1,10 +1,9 @@
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/session";
+import { requireWorkspaceId } from "@/lib/session";
 import { OutreachClient } from "./OutreachClient";
 
 export default async function OutreachPage() {
-  const session = await getSession();
-  const workspaceId = session?.workspaceId || "demo";
+  const workspaceId = await requireWorkspaceId();
 
   const dbMessages = await prisma.outreachMessage.findMany({
     where: { 

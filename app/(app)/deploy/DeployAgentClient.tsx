@@ -8,7 +8,9 @@ import { Bot, Search, Mail, Zap, CheckCircle2, ChevronRight, Settings2 } from "l
 import { deployCustomAgent } from "./actions";
 import { useRouter } from "next/navigation";
 
-export function DeployAgentClient({ workspaceId }: { workspaceId: string }) {
+// No longer takes a workspaceId — the server action reads it from the session,
+// so passing it through the browser served no purpose but to be tampered with.
+export function DeployAgentClient() {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [isSuccess, setIsSuccess] = useState(false);
@@ -37,7 +39,7 @@ export function DeployAgentClient({ workspaceId }: { workspaceId: string }) {
         .map(([key]) => key);
 
       await deployCustomAgent({
-        workspaceId,
+        // No workspaceId — the action takes it from the session.
         name: formData.name,
         goal: formData.goal,
         tools: selectedTools,

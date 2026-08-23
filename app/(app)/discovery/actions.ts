@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/session";
+import { requireWorkspaceId } from "@/lib/session";
 import { runDiscoveryEngine } from "@/lib/ai/discovery";
 import { sweepStaleRuns } from "@/lib/ai/stale-runs";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -17,12 +17,7 @@ export async function startDiscovery(payload: {
     excludeKeywords?: string[];
   }
 }) {
-  const session = await getSession();
-  if (!session?.user) {
-    throw new Error("Unauthorized: You must be logged in to start discovery.");
-  }
-  const workspaceId = session.workspaceId;
-  if (!workspaceId) throw new Error("Workspace missing");
+  const workspaceId = await requireWorkspaceId();
 
   // 1. Enforce Budget Limit
   const agent = await prisma.customAgent.findFirst({
@@ -95,17 +90,21 @@ export async function startDiscovery(payload: {
 }
 
 export async function checkRunStatus(runId: string) {
-  const session = await getSession();
-  if (!session?.user) throw new Error("Unauthorized");
+  const workspaceId = await requireWorkspaceId();
 
   // This is the endpoint the UI polls while a run is in progress, so it's the
   // right place to notice a run that has stopped making progress. Without this
   // a run killed mid-execution stays QUEUED/RUNNING forever and the client
   // polls a spinner indefinitely.
-  await sweepStaleRuns(session.workspaceId ?? undefined);
+  await sweepStaleRuns(workspaceId);
 
-  const run = await prisma.agentRun.findUnique({
-    where: { id: runId }
+  // `findUnique({ where: { id: runId } })` here would return any workspace's
+  // run — including its `errorMessage`, which quotes company names.
+  const run = await prisma.agentRun.findFirst({
+    where: { id: runId, workspaceId }
   });
-  return { status: run?.status, errorMessage: run?.errorMessage };
+
+  if (!run) throw new Error("That run was not found in your workspace.");
+
+  return { status: run.status, errorMessage: run.errorMessage };
 }

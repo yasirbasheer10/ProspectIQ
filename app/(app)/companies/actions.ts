@@ -1,12 +1,11 @@
 "use server";
 
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/session";
+import { requireWorkspaceId } from "@/lib/session";
 import { revalidatePath } from "next/cache";
 
 export async function deleteCompany(companyId: string) {
-  const session = await getSession();
-  const workspaceId = session?.workspaceId || "demo";
+  const workspaceId = await requireWorkspaceId();
 
   try {
     // We only delete if it belongs to the current workspace
@@ -26,8 +25,7 @@ export async function deleteCompany(companyId: string) {
 }
 
 export async function bulkDeleteCompanies(companyIds: string[]) {
-  const session = await getSession();
-  const workspaceId = session?.workspaceId || "demo";
+  const workspaceId = await requireWorkspaceId();
 
   try {
     await prisma.company.deleteMany({

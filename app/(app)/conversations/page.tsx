@@ -1,10 +1,9 @@
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/session";
+import { requireWorkspaceId } from "@/lib/session";
 import { ConversationsClient } from "./ConversationsClient";
 
 export default async function ConversationsPage() {
-  const session = await getSession();
-  const workspaceId = session?.workspaceId || "demo";
+  const workspaceId = await requireWorkspaceId();
 
   const conversations = await prisma.conversation.findMany({
     where: { 

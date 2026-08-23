@@ -209,23 +209,43 @@ export function SettingsClient({ initialDemoMode, icp, offer }: SettingsClientPr
                   <p className="text-[13px] text-[#86868B]">Seeds the database with a complete pipeline journey (discovery, scoring, outreach, and simulated replies). Useful for live product presentations.</p>
                 </div>
                 <div className="flex gap-3">
-                  <Button 
-                    variant="primary" 
+                  <Button
+                    variant="primary"
                     onClick={async () => {
                       setIsSaving(true);
-                      await fetch("/api/demo/seed", { method: "POST" });
+                      const res = await fetch("/api/demo/seed", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: "{}",
+                      });
+                      if (!res.ok) {
+                        setIsSaving(false);
+                        alert(`Could not load demo data: ${(await res.json().catch(() => ({}))).error ?? res.statusText}`);
+                        return;
+                      }
                       window.location.reload();
                     }}
                     disabled={isSaving}
                   >
                     LOAD DEMO
                   </Button>
-                  <Button 
-                    className="bg-[#FF3B30] text-white hover:bg-[#D70015]" 
+                  <Button
+                    className="bg-[#FF3B30] text-white hover:bg-[#D70015]"
                     onClick={async () => {
                       if (!confirm("Are you sure you want to completely wipe all demo data?")) return;
                       setIsSaving(true);
-                      await fetch("/api/demo/reset", { method: "POST" });
+                      // The route requires this exact string in the body — it
+                      // refuses requests that can't have been made deliberately.
+                      const res = await fetch("/api/demo/reset", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ confirm: "RESET MY WORKSPACE" }),
+                      });
+                      if (!res.ok) {
+                        setIsSaving(false);
+                        alert(`Could not reset demo data: ${(await res.json().catch(() => ({}))).error ?? res.statusText}`);
+                        return;
+                      }
                       window.location.reload();
                     }}
                     disabled={isSaving}
