@@ -1,25 +1,8 @@
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { KpiCard } from "@/components/ui/Card";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { requireSession } from "@/lib/session";
 import { sweepStaleRuns } from "@/lib/ai/stale-runs";
-import {
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-  Building2,
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-  CheckCircle2,
-  Target,
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-  GitBranch,
-  Zap,
-  UserPlus,
-  ArrowRight,
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-  Send,
-} from "lucide-react";
+import { Target, ArrowRight } from "lucide-react";
 
 import { DashboardActions } from "./DashboardActions";
 import { Greeting } from "@/components/ui/Greeting";
@@ -37,7 +20,17 @@ export default async function DashboardPage() {
   const discoveredCount = await prisma.company.count({ where: { workspaceId } });
   const qualifiedCount = await prisma.opportunity.count({ where: { workspaceId } });
   const sentCount = await prisma.outreachMessage.count({ where: { status: "SENT", opportunity: { workspaceId } } });
-  const highConfidenceCount = await prisma.opportunity.count({ where: { workspaceId, status: "APPROVED" } });
+
+  // The fourth tile used to read `approved / qualified * 100`, labelled
+  // "Confidence score avg." — a conversion rate under a confidence label, and it
+  // fell back to a hardcoded "94%" whenever nothing was APPROVED. This is the
+  // real average of the composite score the scoring engine writes, and it shows
+  // an em dash when there is nothing to average rather than inventing a number.
+  const scoreAggregate = await prisma.opportunityScore.aggregate({
+    _avg: { overallScore: true },
+    where: { opportunity: { workspaceId } },
+  });
+  const averageScore = scoreAggregate._avg.overallScore;
 
   const latestSignals = await prisma.signal.findMany({
     where: { company: { workspaceId } },
@@ -102,9 +95,9 @@ export default async function DashboardPage() {
             <div className="w-px self-stretch bg-[#E5E5EA] mx-2" />
             <div className="flex-1 pl-8">
               <p className="text-[42px] font-semibold text-[#1D1D1F] leading-none font-heading">
-                {highConfidenceCount > 0 ? `${Math.min(99, Math.round((highConfidenceCount / Math.max(qualifiedCount, 1)) * 100))}%` : "94%"}
+                {averageScore === null ? "—" : Math.round(averageScore)}
               </p>
-              <p className="text-[13px] text-[#6E6E73] mt-2">Confidence score avg.</p>
+              <p className="text-[13px] text-[#6E6E73] mt-2">Avg. opportunity score</p>
             </div>
           </div>
 
@@ -113,7 +106,7 @@ export default async function DashboardPage() {
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-[20px] font-semibold text-[#1D1D1F]">Intelligence Feed</h2>
-                <p className="text-[13px] text-[#6E6E73] mt-0.5">Latest high-confidence signals detected in the last 24 hours.</p>
+                <p className="text-[13px] text-[#6E6E73] mt-0.5">The three most recent buying signals detected for your companies.</p>
               </div>
               <Link href="/agent-activity" className="inline-flex items-center gap-1 text-[13px] font-medium text-[#0071E3] hover:underline">
                 View all <ArrowRight size={13} strokeWidth={2.5} />
@@ -121,56 +114,6 @@ export default async function DashboardPage() {
             </div>
 
             <div className="rounded-xl border border-[#E5E5EA] bg-white divide-y divide-[#F2F2F7] overflow-hidden">
-              {/* Static demo signals always shown */}
-              <div className="p-5 flex gap-4 hover:bg-[#F9F9FB] transition-colors">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#0071E3]/10 text-[#0071E3]">
-                  <Zap size={18} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-4">
-                    <h4 className="text-[14px] font-semibold text-[#1D1D1F]">Series C Funding Signal</h4>
-                    <span className="text-[11px] text-[#86868B] shrink-0">2h ago</span>
-                  </div>
-                  <p className="text-[13px] text-[#4B5563] mt-1 leading-relaxed">
-                    Acme Corp just announced a $45M Series C led by Sequoia. Their hiring page shows 5 new open roles in Data Engineering, matching your ICP perfectly.
-                  </p>
-                  <div className="flex items-center gap-3 mt-2.5">
-                    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[#0071E3] bg-[#0071E3]/8 px-2 py-0.5 rounded-full">
-                      <span className="h-1.5 w-1.5 rounded-full bg-[#0071E3] inline-block" />
-                      98% Match
-                    </span>
-                    <Link href="/companies" className="text-[12px] font-medium text-[#1D1D1F] border border-[#E5E5EA] rounded-md px-2.5 py-1 hover:bg-[#F5F5F7] transition-colors">
-                      Draft Outreach
-                    </Link>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-5 flex gap-4 hover:bg-[#F9F9FB] transition-colors">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#5856D6]/10 text-[#5856D6]">
-                  <UserPlus size={18} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-4">
-                    <h4 className="text-[14px] font-semibold text-[#1D1D1F]">Key Executive Move</h4>
-                    <span className="text-[11px] text-[#86868B] shrink-0">5h ago</span>
-                  </div>
-                  <p className="text-[13px] text-[#4B5563] mt-1 leading-relaxed">
-                    Sarah Jenkins (former VP Eng at Globex) just joined TechFlow as CTO. Historical data shows she typically evaluates new tooling within the first 90 days.
-                  </p>
-                  <div className="flex items-center gap-3 mt-2.5">
-                    <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[#5856D6] bg-[#5856D6]/8 px-2 py-0.5 rounded-full">
-                      <span className="h-1.5 w-1.5 rounded-full bg-[#5856D6] inline-block" />
-                      92% Match
-                    </span>
-                    <Link href="/companies" className="text-[12px] font-medium text-[#1D1D1F] border border-[#E5E5EA] rounded-md px-2.5 py-1 hover:bg-[#F5F5F7] transition-colors">
-                      Review Profile
-                    </Link>
-                  </div>
-                </div>
-              </div>
-
-              {/* Real signals from DB */}
               {latestSignals.map((signal) => (
                 <div key={signal.id} className="p-5 flex gap-4 hover:bg-[#F9F9FB] transition-colors">
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#34C759]/10 text-[#34C759]">

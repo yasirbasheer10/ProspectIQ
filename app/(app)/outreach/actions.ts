@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { assertOutreachMessageInWorkspace } from "@/lib/authz";
 import { assertNotSuppressed } from "@/lib/outreach/suppression";
+import { FEATURES, OUTBOUND_DISABLED_REASON } from "@/lib/features";
 import { requireWorkspaceId } from "@/lib/session";
 import { revalidatePath } from "next/cache";
 
@@ -24,10 +25,18 @@ export async function updateOutreachStatus(id: string, status: string, newBody?:
   // recipient we need for the suppression check below.
   const message = await assertOutreachMessageInWorkspace(id, workspaceId);
 
-  // Nothing in the app sets SENT yet — there is no outbound send path. The check
-  // lives here so that whichever code eventually sends has to pass it, rather
-  // than being a rule someone has to remember to add later.
+  // `SENT` means "this left the building". Nothing in the app can make that true
+  // yet — there is no outbound send path — so accepting the transition would put
+  // a row in the database saying an email was delivered when none was. Refuse it
+  // until `ENABLE_OUTBOUND_SENDING` is on and something actually sends.
+  //
+  // The suppression check stays on this transition rather than moving into the
+  // future sender, so whichever code eventually sends has to pass it instead of
+  // it being a rule someone has to remember to add.
   if (parsedStatus.data === "SENT") {
+    if (!FEATURES.outboundSending) {
+      throw new Error(OUTBOUND_DISABLED_REASON);
+    }
     await assertNotSuppressed(workspaceId, {
       email: message.contact?.email,
       domain: message.opportunity?.company?.domain,

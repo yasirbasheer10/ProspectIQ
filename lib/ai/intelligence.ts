@@ -1,10 +1,11 @@
 import type { z } from "zod";
 import { prisma } from "@/lib/db";
-import { ai } from "./gemini";
+import { ai, MODEL } from "./groq";
 import { performSearch } from "./search";
 import { IntelligenceSchema, parseAIResponse } from "./schemas";
 import { STALE_RUN_TIMEOUT_MS } from "./stale-runs";
 import { calculateOpportunityScore, type ScoreInput } from "@/lib/scoring/opportunity-score";
+import { computeIcpFit, type IcpFitResult } from "@/lib/scoring/icp-fit";
 
 type IntelligenceOutput = z.infer<typeof IntelligenceSchema>;
 
@@ -172,7 +173,7 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
     while (retries < maxRetries) {
       try {
         response = await ai.chat.completions.create({
-          model: "openai/gpt-oss-120b",
+          model: MODEL,
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           temperature: 0.2
@@ -198,7 +199,27 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
     );
 
     // 4. Calculate Scores using the REAL scoring engine
-    const scoreInput = mapAIOutputToScoreInput(data);
+    //
+    // Firmographic fit is computed in code from the company row and the active
+    // ICP, and it overrides whatever the model said about `icp_fit`. Every
+    // sub-score used to be model-generated, and at `temperature: 0.2` with no
+    // seed the same company could score into different grade bands on two runs.
+    // Industry, headcount and geography are facts we already hold, so there is
+    // no reason to ask — and this makes at least 20% of the composite
+    // reproducible. `null` means there was nothing to compare (no active ICP, or
+    // no firmographics on the company), in which case the model's number stands.
+    const activeIcp = company.workspace?.icps?.find((icp) => icp.isActive) ?? null;
+    const icpFit = computeIcpFit(company, activeIcp);
+
+    if (icpFit) {
+      console.log(
+        `[intelligence] Deterministic ICP fit for ${company.name}: ${icpFit.score}` +
+        (icpFit.excluded ? " (excluded industry)" : "") +
+        ` — ${icpFit.reasons.join(" ")}`
+      );
+    }
+
+    const scoreInput = mapAIOutputToScoreInput(data, icpFit);
     const scores = calculateOpportunityScore(scoreInput);
 
     // 5–8 and 10. One transaction.
@@ -482,19 +503,43 @@ ${intelligenceSchemaDefinition}
  * Maps the raw AI output into proper ScoreInput for the real scoring engine.
  * Each factor is derived from the AI's independent assessment rather than
  * a single self-reported confidence number.
+ *
+ * `deterministicIcpFit` wins over the model's `icp_fit` when it is present — see
+ * `lib/scoring/icp-fit.ts` for why firmographic fit is not the model's job.
  */
-function mapAIOutputToScoreInput(data: IntelligenceOutput): ScoreInput {
+export function mapAIOutputToScoreInput(
+  data: IntelligenceOutput,
+  deterministicIcpFit?: IcpFitResult | null
+): ScoreInput {
   const assessment = data.scoring_assessment;
 
-  // If the AI returned proper per-factor assessments, use them directly
-  if (assessment && typeof assessment === 'object') {
+  // Only trust the per-factor block if it actually carries numbers. The check
+  // used to be `assessment && typeof assessment === 'object'`, which an empty
+  // `{}` passes — every factor then clamped to 0 and the company graded F on a
+  // response that had simply omitted the block. An empty or number-free object
+  // now falls through to the structural fallback below.
+  const hasFactorScores =
+    !!assessment &&
+    typeof assessment === "object" &&
+    [
+      assessment.icp_fit?.score,
+      assessment.problem_evidence?.score,
+      assessment.buying_intent?.score,
+      assessment.service_match?.score,
+      assessment.buyer_confidence?.score,
+      assessment.contactability?.score,
+    ].some((v) => typeof v === "number");
+
+  if (hasFactorScores) {
     return {
-      icpFit: clampScore(assessment.icp_fit?.score),
-      problemEvidence: clampScore(assessment.problem_evidence?.score),
-      buyingIntent: clampScore(assessment.buying_intent?.score),
-      serviceMatch: clampScore(assessment.service_match?.score),
-      buyerConfidence: clampScore(assessment.buyer_confidence?.score),
-      contactability: clampScore(assessment.contactability?.score),
+      icpFit: deterministicIcpFit
+        ? deterministicIcpFit.score
+        : clampScore(assessment!.icp_fit?.score),
+      problemEvidence: clampScore(assessment!.problem_evidence?.score),
+      buyingIntent: clampScore(assessment!.buying_intent?.score),
+      serviceMatch: clampScore(assessment!.service_match?.score),
+      buyerConfidence: clampScore(assessment!.buyer_confidence?.score),
+      contactability: clampScore(assessment!.contactability?.score),
     };
   }
 
@@ -508,7 +553,11 @@ function mapAIOutputToScoreInput(data: IntelligenceOutput): ScoreInput {
   const hasVerifiedContacts = data.decision_makers.some(dm => dm.email || dm.is_verified);
 
   return {
-    icpFit: hasEvidence ? 65 + Math.min(25, data.evidence.length * 8) : 40,
+    // The evidence-count heuristic below is a proxy for "we know something about
+    // this company", which is not what ICP fit means. Prefer the real thing.
+    icpFit: deterministicIcpFit
+      ? deterministicIcpFit.score
+      : hasEvidence ? 65 + Math.min(25, data.evidence.length * 8) : 40,
     problemEvidence: hasProblems ? 50 + Math.min(40, data.problems.length * 15) : 20,
     buyingIntent: hasSignals ? 40 + Math.min(50, data.signals.length * 12) : 15,
     serviceMatch: data.recommended_offer ? 70 : 30,

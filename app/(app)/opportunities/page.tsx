@@ -6,6 +6,7 @@ import { Filter, ChevronRight, User, Briefcase, Zap, Building } from "lucide-rea
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { requireWorkspaceId } from "@/lib/session";
+import { getScoreColor, getGrade } from "@/lib/scoring/opportunity-score";
 
 export default async function OpportunitiesPage() {
   const workspaceId = await requireWorkspaceId();
@@ -33,9 +34,10 @@ export default async function OpportunitiesPage() {
           
           {opportunities.length > 0 ? opportunities.map((opp) => {
             const company = opp.company;
-            const scoreObj = opp.score;
-            const overallScore = scoreObj ? scoreObj.overallScore || 70 : 70;
-            const isHighConfidence = overallScore > 80;
+            // Was `opp.score ? opp.score.overallScore || 70 : 70`, which turned
+            // both "not scored yet" and a genuine score of 0 into a 70 — and the
+            // Confidence badge below was derived from that invented number.
+            const overallScore = opp.score?.overallScore ?? null;
 
             return (
               <Card key={opp.id} className="p-8 hover:shadow-apple-md transition-shadow">
@@ -55,13 +57,23 @@ export default async function OpportunitiesPage() {
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <p className="text-[11px] font-medium text-[#86868B] uppercase tracking-wider mb-1">Score</p>
-                          <p className="text-3xl font-semibold tracking-tight text-[#1D1D1F]">{Math.round(overallScore)}</p>
+                          {overallScore !== null ? (
+                            <p className={`text-3xl font-semibold tracking-tight ${getScoreColor(overallScore)}`}>
+                              {Math.round(overallScore)}
+                            </p>
+                          ) : (
+                            <p className="text-3xl font-semibold tracking-tight text-[#86868B]">—</p>
+                          )}
                         </div>
                         <div>
-                          <p className="text-[11px] font-medium text-[#86868B] uppercase tracking-wider mb-2">Confidence</p>
-                          <Badge variant={isHighConfidence ? "info" : "warning"} className="px-3 py-1">
-                            {isHighConfidence ? "High" : "Medium"}
-                          </Badge>
+                          <p className="text-[11px] font-medium text-[#86868B] uppercase tracking-wider mb-2">Grade</p>
+                          {overallScore !== null ? (
+                            <Badge variant={overallScore >= 70 ? "info" : "warning"} className="px-3 py-1">
+                              {getGrade(overallScore)}
+                            </Badge>
+                          ) : (
+                            <Badge variant="default" className="px-3 py-1">Not scored</Badge>
+                          )}
                         </div>
                       </div>
                     </div>

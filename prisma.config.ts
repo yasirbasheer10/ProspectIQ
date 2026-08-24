@@ -52,7 +52,10 @@ const readEnv = (key: string) => process.env[key] || fileEnv[key];
 let databaseUrl = isPushing ? readEnv('POSTGRES_URL_NON_POOLING') : undefined;
 databaseUrl ||= readEnv('DATABASE_URL') || readEnv('POSTGRES_URL') || readEnv('POSTGRES_PRISMA_URL');
 
-if (!databaseUrl) {
+// `prisma generate` and `prisma validate` never open a connection, so they must
+// work with no database URL at all — that is what lets CI run `npm run build`
+// without secrets. Only the connecting commands need a URL.
+if (!databaseUrl && isPushing) {
   throw new Error(
     'No database URL found. Set DATABASE_URL in your environment, or create a local .env ' +
       '(or .env.local) containing it — e.g. by running `npx vercel link` then ' +
@@ -61,7 +64,7 @@ if (!databaseUrl) {
   );
 }
 
-if (!isPushing && !databaseUrl.includes('localhost') && !databaseUrl.includes('127.0.0.1')) {
+if (databaseUrl && !isPushing && !databaseUrl.includes('localhost') && !databaseUrl.includes('127.0.0.1')) {
   const separator = databaseUrl.includes('?') ? '&' : '?';
   if (!databaseUrl.includes('pgbouncer=true')) {
     databaseUrl += `${separator}pgbouncer=true`;
@@ -73,7 +76,8 @@ if (!isPushing && !databaseUrl.includes('localhost') && !databaseUrl.includes('1
 
 export default defineConfig({
   schema: "./prisma/schema.prisma",
-  datasource: {
-    url: databaseUrl,
-  },
+  // Omitted entirely when unset, rather than passed as undefined: Prisma's own
+  // error for a missing url ("The datasource.url property is required") sends
+  // you looking at this file instead of at your environment.
+  ...(databaseUrl ? { datasource: { url: databaseUrl } } : {}),
 });

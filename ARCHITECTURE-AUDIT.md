@@ -87,10 +87,16 @@ about it. A durable runner (queue, or a cron route that resumes work) is the rea
 replies through `simulateReplyAction` (`app/(app)/conversations/actions.ts:7`); there is no
 inbound email webhook. Both should be hidden behind a flag or finished, because right now they
 look shipped.
+**Done 2026-08-24:** hidden, not finished — see fix 18. `lib/features.ts` holds the two flags.
+`/sequences` returns `notFound()` unless `ENABLE_SEQUENCES=true`, and the nav item is gone.
+Conversations stays reachable (the classification and drafting it does are real) but no longer
+claims to send.
 
 **Nothing sends outreach.** `lib/email.ts` is only ever called for email verification and
 password reset. No code path sets an `OutreachMessage` to `SENT`. The pipeline produces drafts
 and stops.
+**Done 2026-08-24:** still true, but the UI now says so instead of implying otherwise, and the
+`SENT` transition is refused while `ENABLE_OUTBOUND_SENDING` is off — see fix 18.
 
 ---
 
@@ -152,6 +158,11 @@ parse on read.
 gone out via `prisma db push`. That means no review of destructive changes, no rollback, and no
 record of when a column appeared. Fine while you're the only user; the first time you need to
 undo a schema change it will hurt.
+**Done 2026-08-24** as item 19. `prisma/migrations/0_init/migration.sql` is the current schema, to
+be recorded against the live database — by running
+`prisma/manual/2026-08-25-baseline-migration-history.sql` in the Supabase SQL Editor — rather than
+executed against it. `prisma/README.md` is the procedure from there. `db:push` is out of
+`package.json`.
 
 **`Company` is 34 fields wide** with most enrichment fields optional. Not wrong, but as the
 enrichment pipeline grows this is the table that will accumulate half-populated columns. Worth
@@ -745,40 +756,131 @@ All seven are done, on 2026-08-23. Kept here as a record of what changed and whe
 
 **P2 — maintainability**
 
-12. ~~Delete the ten root scratch files.~~ **Done 2026-08-22.** Still to do: delete
+12. ~~Delete the ten root scratch files.~~ **Done 2026-08-22.** ~~Still to do: delete
     `lib/ai/providers.ts`, `lib/ai/provider.ts`, `ScoreRing.tsx`, `Skeleton.tsx` and the three
-    unused dependencies. Rename `gemini.ts` to `groq.ts` and centralise the model constant.
+    unused dependencies. Rename `gemini.ts` to `groq.ts` and centralise the model constant.~~
+    **Done 2026-08-24.** All five files deleted; `@google/genai`, `cheerio` and `openai` removed
+    from `package.json`. `gemini.ts` is now `lib/ai/groq.ts` and `MODEL` appears exactly once in
+    the codebase, at `groq.ts:24` — switching models is a one-line edit.
     Do **not** delete `proxy.ts` — it is Next 16's middleware file.
-13. Test the engines with mocked LLM and Serper responses.
-14. Add `.gitattributes`, ~~`.env.example`~~, and CI that runs lint, tests and build before deploy.
+13. ~~Test the engines with mocked LLM and Serper responses.~~ **Done 2026-08-24.** Five suites
+    under `__tests__/`: `ai-discovery`, `ai-intelligence`, `ai-orchestrator`, `ai-schemas` and
+    `ai-search`. They mock `lib/db`, `lib/ai/groq` and `lib/ai/search`, so no test touches a real
+    database or spends a token. The behaviour they pin down is mostly the P0 work: that a failed
+    search throws instead of fabricating, that malformed model output is rejected before the first
+    write, and that a cross-workspace company id is refused.
+14. ~~Add `.gitattributes`, `.env.example`, and CI that runs lint, tests and build before deploy.~~
     **`.env.example` done 2026-08-23**, prompted by `db push` failing for want of a local env file.
     It documents all 15 variables, which are required versus optional, what breaks when an optional
     one is missing, and why a push needs the non-pooling URL. `.gitignore` gained `!.env.example` so
     the template is committed while `.env*` stays ignored.
+    **`.gitattributes` and CI done 2026-08-24.** `.github/workflows/verify.yml` runs
+    `tsc --noEmit`, `eslint`, `jest` and `next build` on push. Note it reports rather than gates:
+    Vercel deploys `main` on its own trigger and does not wait for the workflow.
 
-15. Give the orchestrator a budget check and fix `take: 1000` versus its "up to 20" comment;
-    implement or remove the no-op `FIND_BUYER` step.
-16. Split `DiscoveryClient.tsx`; fix `searchParams` typing on the two pages; fix `error.tsx`'s copy
-    and its "Go Home" button; fix the dark-theme score colours.
-17. Add a deterministic ICP-fit component to scoring so ranking is reproducible.
-18. Either finish or hide Sequences and outbound sending.
-19. Introduce migrations before the schema changes again.
-20. Remove the last two cosmetic fabrications on `dashboard/page.tsx`: the `"94%"` confidence
+15. ~~Give the orchestrator a budget check and fix `take: 1000` versus its "up to 20" comment;
+    implement or remove the no-op `FIND_BUYER` step.~~ **Done 2026-08-24.** `take` is now
+    `MAX_COMPANIES_PER_RUN` and a `MAX_LLM_CALLS_PER_RUN` counter stops a run mid-flight, reporting
+    "Stopped early: hit the N-call budget" in the summary rather than silently truncating.
+    `FIND_BUYER` is gone — it re-read the company and appended a string, so the model was choosing
+    between four actions one of which always "succeeded" by doing nothing.
+16. ~~Split `DiscoveryClient.tsx`; fix `searchParams` typing on the two pages; fix `error.tsx`'s copy
+    and its "Go Home" button; fix the dark-theme score colours.~~ **Done 2026-08-24.**
+    `DiscoveryClient.tsx` went from 808 lines to a 212-line orchestrator over eight siblings:
+    `constants.ts`, `useIcpForm.ts` (all eleven `useState` calls plus the one function that builds
+    the engine payload), `useDiscoveryPolling.ts` (the poll loop and its two runaway guards), and
+    `_components/{Primitives,GeographyCard,IcpCards,LocationSelectionModal,DiscoveryLoadingOverlay}`.
+    `Primitives.tsx` consolidates three drifted copies of the same tag pill and five repeated card
+    headers.
+    `searchParams` on `companies/page.tsx` and `contacts/page.tsx` was typed as a plain object and
+    read directly — in Next 16 it is a `Promise`, so `.q` and `.page` were always `undefined` and
+    search and pagination silently did nothing. Both now `await` it.
+    `error.tsx` claimed "Our team has been notified" (nothing is notified) and its "Go Home" button
+    called `window.location.reload()`, which reloaded the page that had just failed. It now links to
+    `/dashboard` and shows `error.digest` as a reference.
+    Score colours were Tailwind 400 weights meant for dark backgrounds, on their own 80/65/50/35
+    ladder while `getGrade` used 85/70/55/40 — so 82 rendered as a blue "A" but graded B. One ladder
+    now, in Apple's accessible-light palette, keyed to the grade so the two cannot disagree.
+17. ~~Add a deterministic ICP-fit component to scoring so ranking is reproducible.~~
+    **Done 2026-08-24.** `lib/scoring/icp-fit.ts` computes firmographic fit in code from industry,
+    headcount and geography against the workspace's active `ICP`, and overrides the model's
+    `icp_fit`, making 20% of the composite reproducible. Three rules: missing company data is
+    unknown rather than a mismatch (the dimension is dropped and the remaining weights
+    re-normalise), dimensions the ICP does not constrain are dropped too, and "nothing to compare"
+    returns `null` so the caller falls back to the model instead of inventing a 50. An excluded
+    industry is a veto. 28 tests in `__tests__/icp-fit.test.ts`.
+    Found and fixed while wiring it: `mapAIOutputToScoreInput` guarded on
+    `assessment && typeof assessment === 'object'`, which an empty `{}` passes — all six factors
+    then clamped to 0 and the company graded F because the model had omitted the block, not because
+    it was a bad lead. The guard now requires at least one real number.
+18. ~~Either finish or hide Sequences and outbound sending.~~
+    **Done 2026-08-24 — hidden, deliberately not finished.** Finishing outbound sending means a
+    durable job runner, which theme three says this app doesn't have; building a sender on
+    fire-and-forget server actions would add a second unreliable thing rather than fix the first.
+    So both are gated in one place, `lib/features.ts`, off unless the env var is exactly `"true"`:
+    - `ENABLE_SEQUENCES` — `/sequences` calls `notFound()` while off. The nav item was already gone,
+      so the route was only reachable by typed URL.
+    - `ENABLE_OUTBOUND_SENDING` — `updateOutreachStatus` throws on the `SENT` transition while off,
+      so nothing can record a delivery that didn't happen. The suppression check stays on that
+      transition rather than being deferred to the future sender, so whatever eventually sends has
+      to pass through it. The Outreach queue shows a warning and its button reads "Approve" instead
+      of "Approve & Send"; the Conversations reply box says an approved reply is recorded on the
+      thread but not emailed.
+
+    Approving is still real work worth doing — it's the human review step — so the flag changes what
+    the UI *claims*, not what it does. One thing it can't fix: `ConversationMessage.sentAt` is
+    `DateTime @default(now())`, non-nullable, so an approved reply gets a send timestamp regardless.
+    Making it nullable is a schema change, blocked by item 19.
+19. ~~Introduce migrations before the schema changes again.~~
+    **Done 2026-08-24.** `prisma/migrations/0_init/migration.sql` — 746 lines, the whole current
+    schema, generated with `migrate diff --from-empty --to-schema` (no database connection needed,
+    and note Prisma 7 renamed those flags from `--to-schema-datamodel`). The live database already
+    has all of it, so it gets **baselined**, not executed: `_prisma_migrations` gets one row saying
+    `0_init` is applied, and no DDL runs. Two ways to do that —
+    `prisma/manual/2026-08-25-baseline-migration-history.sql` in the Supabase SQL Editor, or
+    `npx prisma migrate resolve --applied 0_init` if the CLI can reach the database. Both were tested
+    against a throwaway Postgres: the hand-written SQL writes the same row Prisma does, checksum
+    included, and a following migration applies cleanly on top.
+
+    From there the workflow is `migrate diff --from-config-datasource --to-schema` → **read the
+    SQL** → `migrate deploy`, written up in `prisma/README.md`. `migrate dev` is deliberately not
+    used: it wants a shadow database, and on drift it offers to reset the only database that exists.
+    Reading the generated SQL before it runs is the property `db push` never had, and it's why
+    `db:push` is out of `package.json` (`db:migrate` is now `migrate deploy`, plus `db:status` and a
+    `db:drift` check). `.gitattributes` pins `prisma/migrations/**/*.sql` to LF, because Prisma
+    checksums those files and a CRLF checkout would invalidate every one of them.
+
+    What this unblocks, now that a schema change is reviewable: `Activity.workspaceId` can be
+    tightened to required (section 2), `ConversationMessage.sentAt` can become nullable so an
+    approved-but-unsent reply stops carrying a send timestamp (item 18), and the dedupe keys in
+    `researchCompany` can get real unique constraints instead of dedupe-on-insert (item 8).
+20. ~~Remove the last two cosmetic fabrications on `dashboard/page.tsx`: the `"94%"` confidence
     average shown whenever no opportunity is `APPROVED` (line 104), and the two hardcoded
     Intelligence Feed cards for "Acme Corp" and "Sarah Jenkins" (lines 124–170), which render above
     the real signals — so on an empty workspace the "No signals yet" empty state appears directly
-    underneath two invented signals. Left for P2 because they mislead only the person looking at the
-    screen — unlike the P0 cases, nothing reads them back or writes them to the database.
+    underneath two invented signals.~~ **Done 2026-08-24.** The average is computed from real
+    `aiConfidence` values and renders "—" when there are none; the two invented cards are gone.
+    Was left for P2 because they misled only the person looking at the screen — unlike the P0 cases,
+    nothing read them back or wrote them to the database.
+
+**All twenty are struck off as of 2026-08-24.** One manual step is outstanding and nothing else in
+this list depends on it: run `prisma/manual/2026-08-25-baseline-migration-history.sql` in the Supabase
+SQL Editor to baseline the migration history (item 19).
+
+What the fix order deliberately did *not* solve is theme three — the pipeline still runs in
+fire-and-forget server actions with no durable runner. Items 8, 18 and the stale-run timeout below
+all worked around that rather than fixing it. It's the next real piece of work, and it's bigger than
+any single entry here.
 
 **Also open, added 2026-08-23 while doing P0**
 
-- `searchForTargetsWithAI` (`discovery.ts`) ends with `return filtered.length > 0 ? filtered : domains`,
+- ~~`searchForTargetsWithAI` (`discovery.ts`) ends with `return filtered.length > 0 ? filtered : domains`,
   so when the enterprise-exclusion filter removes every candidate the function returns the
-  *unfiltered* list — the filter silently doesn't apply in exactly the case it matters. Decide
-  whether an empty filtered list should be an error or an empty result, but it shouldn't be a
-  bypass.
-- The model name `"openai/gpt-oss-120b"` is written as a literal at six call sites across five
-  files. Covered by item 12's "centralise the model constant".
+  *unfiltered* list — the filter silently doesn't apply in exactly the case it matters.~~
+  **Fixed 2026-08-24.** It returns `filtered` unconditionally, and an all-excluded result throws
+  with that as the reason rather than handing back the list it had just rejected.
+- ~~The model name `"openai/gpt-oss-120b"` is written as a literal at six call sites across five
+  files.~~ **Fixed 2026-08-24** as part of item 12 — one definition, in `lib/ai/groq.ts`.
 - The 15-minute stale-run timeout is a heuristic, not a fix for the root cause. Until the pipeline
   runs somewhere durable (theme three), a run that dies at second 30 still shows as `RUNNING` for
   15 minutes.

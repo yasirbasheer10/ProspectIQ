@@ -1,7 +1,8 @@
 # ProspectIQ — project map
 
 A plain-language guide to what this app does and which file to open when something needs fixing.
-Written 2026-08-22 by reading every file. Update it when the structure changes.
+Written 2026-08-22 by reading every file; last updated 2026-08-24. Update it when the structure
+changes.
 
 ---
 
@@ -10,8 +11,12 @@ Written 2026-08-22 by reading every file. Update it when the structure changes.
 You describe your ideal customer (an "ICP") and what you sell (an "Offer"). The app then searches
 the public web for companies that match, scrapes each company's site, uses AI to pull out
 firmographics and buying signals, scores each company 0–100 on six factors, finds the likely
-decision-maker, drafts a personalised outreach email, and tracks the reply. Everything is scoped
+decision-maker, and drafts a personalised outreach email for you to review. Everything is scoped
 to a "Workspace" so one login can have several separate books of business.
+
+It stops at the draft. Nothing sends prospect email, and replies only arrive through the "Simulate
+Reply" button — there is no inbound webhook. Both halves are behind flags; see "Two features are
+behind flags" below.
 
 ## The pipeline, in order
 
@@ -27,10 +32,14 @@ The `ORCHESTRATOR` is a loop that walks companies through stages 2–4 automatic
 |---|---|---|
 | Discovery | `lib/ai/discovery.ts` | `Company` + `Signal` rows |
 | Intelligence | `lib/ai/intelligence.ts` | `Evidence`, `Signal`, `Opportunity`, `Contact` rows |
-| Scoring | `lib/scoring/opportunity-score.ts` | `OpportunityScore` row, grade A–F |
-| Outreach | `lib/ai/outreach.ts` | `OutreachMessage` row (a draft) |
+| Scoring | `lib/scoring/opportunity-score.ts` + `lib/scoring/icp-fit.ts` | `OpportunityScore` row, grade A–F |
+| Outreach | `lib/ai/outreach.ts` | `OutreachMessage` row (a draft — nothing sends it) |
 | Conversation | `lib/ai/conversation.ts` | `Conversation` + `ConversationMessage` rows |
 | Auto-pilot | `lib/ai/orchestrator.ts` | Runs 2→4 for every company in a loop |
+
+Five of the six factors are the model's judgement, validated by zod. The sixth, ICP fit, is computed
+in code by `lib/scoring/icp-fit.ts` from industry, headcount and geography — so 20% of every score is
+reproducible, and an excluded industry vetoes the company outright.
 
 ---
 
@@ -44,10 +53,12 @@ The `ORCHESTRATOR` is a loop that walks companies through stages 2–4 automatic
 | Research is wrong / hallucinated | `lib/ai/intelligence.ts` → `buildPrompt()` |
 | Scores feel wrong | `lib/scoring/opportunity-score.ts` (weights at the top) |
 | Emails read badly | `lib/ai/outreach.ts` (the prompt is inline) |
-| Wrong AI model / model errors | `lib/ai/gemini.ts` — **this file is Groq, not Gemini** |
+| Wrong AI model / model errors | `lib/ai/groq.ts` — the `MODEL` constant at line 24 is the only place the model name appears |
 | "…failed: <field> — Required" errors from a run | `lib/ai/schemas.ts` — the zod schema for that call rejected the model's reply |
 | A run sits at "Running" forever, or gets marked failed too early | `lib/ai/stale-runs.ts` (15-minute no-progress timeout) |
 | Auto-pilot stalls or loops | `lib/ai/orchestrator.ts` |
+| A company's ICP-fit score looks wrong | `lib/scoring/icp-fit.ts` — computed in code from industry/headcount/geography, not asked of the model |
+| Sequences returns 404, or "Approve" won't send | `lib/features.ts` — both are behind env flags and off by default |
 | Login / signup / Google / LinkedIn | `lib/auth.ts` |
 | Redirects for logged-out / logged-in users | `proxy.ts` — **this is Next 16's middleware file** |
 | "Workspace missing" / "You are not signed in" errors | `lib/session.ts` — `requireWorkspaceId()` throws rather than falling back to a default workspace |
@@ -57,13 +68,14 @@ The `ORCHESTRATOR` is a loop that walks companies through stages 2–4 automatic
 | An email won't send to a specific address | `lib/outreach/suppression.ts` — it may be suppressed |
 | Nothing in the Agent Activity feed | `lib/activity.ts` — the only writer; rows from before 2026-08-23 have no `workspaceId` and are hidden |
 | Database connection errors | `lib/db.ts` and `prisma.config.ts` |
-| `prisma db push` says the datasource url is required | you have no local `.env` — copy `.env.example` and fill it, or `npx vercel env pull .env.local` |
-| Add or change a database field | `prisma/schema.prisma`, then run `npx prisma db push` |
-| Which environment variables exist | `.env.example` — all 15, with required vs optional marked |
-| Emails not sending | `lib/email.ts` (Resend) |
+| A `prisma migrate` command says the datasource url is required | you have no local `.env` — copy `.env.example` and fill it, or `npx vercel env pull .env.local` |
+| Add or change a database field | `prisma/README.md` first — the procedure is migrations now, not `db push` |
+| Which environment variables exist | `.env.example` — every one the app reads, required vs optional marked |
+| Emails not sending | `lib/email.ts` (Resend) — verification and password reset only; nothing sends prospect email |
 | Sidebar / nav | `components/layout/Sidebar.tsx`, `MobileNav.tsx` |
 | A page's data is wrong | that page's `page.tsx` — each one queries Prisma directly |
 | A button does nothing | that page's `actions.ts` — that's where the server code lives |
+| The Discovery screen | `DiscoveryClient.tsx` is a thin orchestrator; the state is in `useIcpForm.ts` / `useDiscoveryPolling.ts` and the UI in `_components/` |
 
 ---
 
@@ -75,17 +87,33 @@ app/
   (auth)/         login, signup, forgot-password, reset-password
   onboarding/     first-run wizard (ICP + Offer)
   api/            auth endpoints, health check, demo seed/reset
-components/       shared UI (11 files) — layout/ and ui/
+components/       shared UI (9 files) — layout/ and ui/
 lib/              all the real logic (25 files) — see table above
-prisma/           schema.prisma — 24 tables, 11 enums
+prisma/           schema.prisma (24 tables, 11 enums), migrations/, and README.md — read that
+                  before any schema change
 types/            next-auth.d.ts — puts id/workspaceId/onboardingComplete on the session type
-__tests__/        3 test files — scoring, demo fixtures, utils
+__tests__/        9 test files — the five AI engines, scoring, ICP fit, demo fixtures, utils
 scripts/          save.ps1 and undo.ps1 (your deploy + rollback)
+.github/          workflows/verify.yml — runs lint, tests and build on push
 proxy.ts          runs before every matched request — see note below
 prisma.config.ts  resolves the database URL; reads .env / .env.local itself
 .env.example      template for the above — copy it, don't guess
+.gitattributes    LF everywhere except PowerShell; migration SQL is pinned to LF on purpose
 ProspectIQ-Landing-Page/   separate static marketing page, not wired into the app
 ```
+
+### Two features are behind flags
+
+`lib/features.ts` holds them, both off unless the env var is exactly `"true"`:
+
+- `ENABLE_SEQUENCES` — `/sequences` returns 404. The page and tables exist, but nothing creates a
+  sequence outside the demo seed and no scheduler advances one.
+- `ENABLE_OUTBOUND_SENDING` — nothing sends prospect email, so the Outreach queue and the
+  Conversations reply box say "Approve" rather than "Approve & Send", and setting an
+  `OutreachMessage` to `SENT` is refused outright.
+
+Approving is still real — it's the human review step. The flag changes what the screen claims, not
+what it does.
 
 ### Every request starts from the session
 
@@ -115,8 +143,8 @@ Every page is a server component that queries Prisma directly — there is no RE
 app data. Buttons call server actions in the sibling `actions.ts`.
 
 Pages in `(app)/`: dashboard, discovery, companies, companies/[id], opportunities, contacts,
-outreach, conversations, sequences, analytics, agents, agents/[id], agents/[id]/settings,
-agent-activity, deploy, settings, profile.
+outreach, conversations, sequences (404 unless `ENABLE_SEQUENCES=true`), analytics, agents,
+agents/[id], agents/[id]/settings, agent-activity, deploy, settings, profile.
 
 ---
 
@@ -138,8 +166,13 @@ Hunter is only called when a company scores 70+, to protect the 50-credits/month
 
 ## Known problems found on 2026-08-22
 
-Listed worst-first. The whole **P0 and P1** batches from `ARCHITECTURE-AUDIT.md` are now fixed
-(items 1–11 there); what's left is P2 — maintainability, tests, migrations.
+Listed worst-first. **All twenty items** in `ARCHITECTURE-AUDIT.md`'s fix order — P0, P1 and P2 —
+are struck off as of 2026-08-24. One manual step is outstanding: baselining the migration history
+(see #7 below).
+
+What none of it fixed: the pipeline still runs in fire-and-forget server actions with no durable
+runner, so a long run can be killed by a serverless timeout. `sweepStaleRuns` detects that; nothing
+prevents it. That's the next real piece of work.
 
 1. **Fixed 2026-08-22 — fake companies are no longer hardcoded.** `lib/ai/discovery.ts` used to
    return `["vercel.com", "stripe.com", "linear.app"]` in two places when the AI call failed, so a
@@ -165,14 +198,20 @@ Listed worst-first. The whole **P0 and P1** batches from `ARCHITECTURE-AUDIT.md`
    and error text — and clearing the log deleted all workspaces' rows, not just yours. Rows written
    before this date have a null `workspaceId` and appear in no feed; nothing recorded which workspace
    they belonged to, so there's nothing to backfill from.
-5. **A whole unused AI system.** `lib/ai/providers.ts` and `lib/ai/provider.ts` define
-   `getAIProvider()`, `DemoAIProvider` and `OpenAIProvider`. Nothing outside those two files uses
-   them. `AI_PROVIDER`, `OPENAI_API_KEY` and `DEMO_MODE` mostly exist for this dead code.
-6. **Misleading filename.** `lib/ai/gemini.ts` contains the Groq client. `@google/genai` is still
-   in `package.json` but unused. Comments elsewhere still talk about "Gemini Flash" limits.
-7. **No database migration history.** There's no `prisma/migrations/` folder, so schema changes go
-   out via `prisma db push`. Fine for one user; means there's no way to review or roll back a
-   schema change.
+5. **Fixed 2026-08-24 — the unused AI system is gone.** `lib/ai/providers.ts` and `lib/ai/provider.ts`
+   defined `getAIProvider()`, `DemoAIProvider` and `OpenAIProvider`, which nothing outside those two
+   files ever used. Both deleted, along with `components/ui/ScoreRing.tsx` and `Skeleton.tsx`, and
+   `@google/genai`, `cheerio` and `openai` came out of `package.json`.
+6. **Fixed 2026-08-24 — the file is named after what's in it.** `lib/ai/gemini.ts` held the Groq
+   client; it's `lib/ai/groq.ts` now, and the model name lives in one `MODEL` constant there instead
+   of being repeated as a literal at six call sites.
+7. **Fixed 2026-08-24 — there is a migration history.** `prisma/migrations/0_init/migration.sql` is
+   the current schema, and `prisma/README.md` is the procedure for changing it: generate the SQL,
+   read it, then `migrate deploy`. **One manual step is outstanding** — the live database already has
+   these tables, so the history needs baselining once: paste
+   `prisma/manual/2026-08-25-baseline-migration-history.sql` into the Supabase SQL Editor. It writes
+   one bookkeeping row and runs no DDL. `db:push` is out of `package.json` so nothing can quietly
+   bypass the history.
 8. **Fixed:** the build script used to run `prisma db push --accept-data-loss` on every Vercel
    deploy, which could drop columns from the live database without asking. Now it's just
    `prisma generate && next build`.
@@ -181,8 +220,11 @@ Listed worst-first. The whole **P0 and P1** batches from `ARCHITECTURE-AUDIT.md`
    `test-dashboard.ts`, `test-intelligence.ts`, `prospectiq-fixes-1-4.patch`,
    `supabase_migration.sql`) were deleted on 2026-08-22. They're all still in git history if one
    is ever needed back. **`proxy.ts` was deliberately kept** — see the note below; it is live code.
-10. **Tests only cover scoring, demo fixtures and utils.** Nothing tests discovery, intelligence,
-    outreach or auth.
+10. **Fixed 2026-08-24 — the engines have tests.** Five suites under `__tests__/` cover discovery,
+    intelligence, the orchestrator, the zod schemas and search, plus one for the new deterministic
+    ICP fit. They mock `lib/db`, `lib/ai/groq` and `lib/ai/search`, so no test touches a real
+    database or spends an API credit. 185 tests across 9 suites; `npm run verify` runs typecheck,
+    lint and all of them.
 11. **Fixed 2026-08-23 — LLM output is validated before it reaches the database.** All four engines
     used to `JSON.parse` the model's reply and write the fields straight into Prisma, so a missing
     field became an empty column and an unrecognised `SignalType` string became a failed insert
@@ -230,14 +272,15 @@ To take back the last change:
 powershell -ExecutionPolicy Bypass -File .\scripts\undo.ps1
 ```
 
-Schema changes are separate and deliberate: `npx prisma db push` after editing
-`prisma/schema.prisma`. Never put database commands back into the build script.
+Schema changes are separate and deliberate, and they go through migrations — `prisma/README.md` has
+the procedure. Never put database commands back into the build script.
 
-**When a change touches both code and schema, push the schema first.** Vercel deploys the moment
+**When a change touches both code and schema, apply the migration first.** Vercel deploys the moment
 `save.ps1` pushes, so if the code lands before the column exists, the live site runs new code against
-an old database and throws until you catch up. Order: `npx prisma db push`, check the site still
-works, then `save.ps1`.
+an old database and throws until you catch up. Order: `npx prisma migrate deploy`, check the site
+still works, then `save.ps1`.
 
-`db push` needs a local `.env` or `.env.local` — the URL is not read from Vercel. If it fails with
-*"The datasource.url property is required"*, that file is missing. Copy `.env.example`, or run
-`npx vercel link` then `npx vercel env pull .env.local`.
+Every `prisma migrate` command needs a local `.env` or `.env.local` — the URL is not read from
+Vercel, and it has to be the direct connection (`POSTGRES_URL_NON_POOLING`), because DDL through the
+pooler hangs. If it fails with *"The datasource.url property is required"*, that file is missing.
+Copy `.env.example`, or run `npx vercel link` then `npx vercel env pull .env.local`.

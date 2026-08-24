@@ -1,5 +1,5 @@
 import { prisma } from "../db";
-import { ai } from "./gemini";
+import { ai, MODEL } from "./groq";
 import { OutreachSchema, parseAIResponse } from "./schemas";
 
 const outreachSchemaDefinition = `
@@ -90,7 +90,7 @@ ${outreachSchemaDefinition}
     while (retries < maxRetries) {
       try {
         response = await ai.chat.completions.create({
-          model: "openai/gpt-oss-120b",
+          model: MODEL,
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           temperature: 0.7,

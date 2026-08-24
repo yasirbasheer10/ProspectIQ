@@ -5,16 +5,17 @@ import { Topbar } from "@/components/layout/Topbar";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { Mail, Check, X, Filter, Edit2, Loader2, Save } from "lucide-react";
+import { Check, X, Filter, Edit2, Info, Save } from "lucide-react";
 import { updateOutreachStatus } from "./actions";
 
 interface OutreachClientProps {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
   initialQueue: any[];
+  /** Passed down from the server page so the button says what it does. */
+  outboundSendingEnabled: boolean;
 }
 
-export function OutreachClient({ initialQueue }: OutreachClientProps) {
+export function OutreachClient({ initialQueue, outboundSendingEnabled }: OutreachClientProps) {
   const [queue, setQueue] = useState(initialQueue);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
@@ -57,7 +58,21 @@ export function OutreachClient({ initialQueue }: OutreachClientProps) {
               <h3 className="text-xl font-medium text-[#1D1D1F]">Approval Queue</h3>
               <Badge variant="warning">{queue.length} Pending</Badge>
             </div>
-            
+
+            {/* The primary button used to read "Approve & Send" while nothing
+                sent. Approving is real and worth doing — it's the human review
+                step — but the queue has to say where an approved draft goes. */}
+            {!outboundSendingEnabled && (
+              <div className="mb-4 flex items-start gap-3 rounded-xl border border-[#B25000]/20 bg-[#B25000]/[0.06] p-4">
+                <Info size={18} className="mt-0.5 shrink-0 text-[#B25000]" />
+                <p className="text-[13px] leading-relaxed text-[#B25000]">
+                  <span className="font-semibold">Sending is not enabled.</span> Approved drafts are
+                  saved and marked approved, but nothing is emailed — there is no send path yet.
+                </p>
+              </div>
+            )}
+
+
             {queue.length > 0 ? (
               <div className="space-y-4">
                 {queue.map(msg => (
@@ -96,7 +111,9 @@ export function OutreachClient({ initialQueue }: OutreachClientProps) {
                         </>
                       ) : (
                         <>
-                          <Button variant="primary" size="sm" icon={Check} onClick={() => handleAction(msg.id, 'APPROVE')} disabled={isPending}>Approve & Send</Button>
+                          <Button variant="primary" size="sm" icon={Check} onClick={() => handleAction(msg.id, 'APPROVE')} disabled={isPending}>
+                            {outboundSendingEnabled ? "Approve & Send" : "Approve"}
+                          </Button>
                           <Button variant="secondary" size="sm" icon={Edit2} onClick={() => startEdit(msg.id, msg.preview)} disabled={isPending}>Edit Draft</Button>
                           <Button variant="ghost" size="sm" icon={X} className="text-[#FF3B30]" onClick={() => handleAction(msg.id, 'REJECT')} disabled={isPending}>Reject</Button>
                         </>
@@ -110,8 +127,11 @@ export function OutreachClient({ initialQueue }: OutreachClientProps) {
                 <div className="flex justify-center mb-4 text-[#34C759]">
                   <Check size={48} />
                 </div>
-                <h3 className="text-xl font-medium text-[#1D1D1F] mb-2">You&apos;re all caught up!</h3>
-                <p className="text-[#86868B] text-[15px]">No messages pending approval. Your AI agent is currently searching for new opportunities.</p>
+                <h3 className="text-xl font-medium text-[#1D1D1F] mb-2">Nothing pending approval</h3>
+                <p className="text-[#86868B] text-[15px]">
+                  Drafts appear here once an agent run produces them. Start one from Discovery or
+                  Deploy.
+                </p>
               </Card>
             )}
           </div>

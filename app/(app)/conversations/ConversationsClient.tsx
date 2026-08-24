@@ -3,20 +3,19 @@
 import { useState, useTransition } from "react";
 import { Topbar } from "@/components/layout/Topbar";
 import { EmptyState } from "@/components/ui/EmptyState";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { MessageSquare, ChevronRight, Send, User, Sparkles, CheckCircle2, Bot, X, RotateCcw, AlertTriangle } from "lucide-react";
+import { MessageSquare, Send, Sparkles, CheckCircle2, Bot, X, AlertTriangle } from "lucide-react";
 import { simulateReplyAction, processConversationAction } from "./actions";
 
 interface ConversationsClientProps {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
   conversations: any[];
+  /** Passed down from the server page so the button says what it does. */
+  outboundSendingEnabled: boolean;
 }
 
-export function ConversationsClient({ conversations }: ConversationsClientProps) {
+export function ConversationsClient({ conversations, outboundSendingEnabled }: ConversationsClientProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [showSimulateModal, setShowSimulateModal] = useState(false);
@@ -76,8 +75,6 @@ export function ConversationsClient({ conversations }: ConversationsClientProps)
               <div className="p-4 space-y-3">
                 {conversations.map(conv => {
                   const isSelected = conv.id === selectedId;
-                  // Wait, page.tsx took 1 descending. Let's see. If we pass all messages from page, it's better. 
-                  // I'll adjust page.tsx to fetch all messages.
                   return (
                     <div 
                       key={conv.id} 
@@ -163,16 +160,29 @@ export function ConversationsClient({ conversations }: ConversationsClientProps)
                               </div>
                             )}
 
+                            {/* Approving records the reply in the thread, which is
+                                real work. It does not email it — the button used to
+                                say "Approve & Send" regardless. */}
+                            {!outboundSendingEnabled && (
+                              <div className="mb-4 flex items-start gap-3 rounded-xl border border-[#B25000]/20 bg-[#B25000]/[0.06] p-3">
+                                <AlertTriangle size={16} className="mt-0.5 shrink-0 text-[#B25000]" />
+                                <p className="text-[12px] leading-relaxed text-[#B25000]">
+                                  <span className="font-semibold">Sending is not enabled.</span> An approved
+                                  reply is recorded on this thread, but nothing is emailed.
+                                </p>
+                              </div>
+                            )}
+
                             <div className="flex items-center gap-3 flex-wrap">
                               {selectedConv.lastClassification !== 'UNSUBSCRIBE' && (
-                                <Button 
-                                  variant="primary" 
-                                  size="sm" 
-                                  icon={Send} 
+                                <Button
+                                  variant="primary"
+                                  size="sm"
+                                  icon={outboundSendingEnabled ? Send : CheckCircle2}
                                   loading={isPending}
                                   onClick={() => handleAction(msg.id, "APPROVE")}
                                 >
-                                  Approve & Send
+                                  {outboundSendingEnabled ? "Approve & Send" : "Approve reply"}
                                 </Button>
                               )}
                               <Button 

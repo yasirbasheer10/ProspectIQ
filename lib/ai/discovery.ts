@@ -1,7 +1,7 @@
 import type { z } from "zod";
 import { prisma } from "@/lib/db";
 import { logActivity } from "@/lib/activity";
-import { ai } from "./gemini";
+import { ai, MODEL } from "./groq";
 import { performSearch } from "./search";
 import { sanitizeText } from "./intelligence";
 import { DiscoveryDomainsSchema, ExtractedCompanySchema, parseAIResponse } from "./schemas";
@@ -240,7 +240,7 @@ async function extractCompanyData(
     while (retries < maxRetries) {
       try {
         response = await ai.chat.completions.create({
-          model: "openai/gpt-oss-120b",
+          model: MODEL,
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           temperature: 0.2
@@ -450,7 +450,7 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any): Promise<strin
     while (retries < maxRetries) {
       try {
         response = await ai.chat.completions.create({
-          model: "openai/gpt-oss-120b",
+          model: MODEL,
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
           temperature: 0.2
@@ -484,7 +484,24 @@ async function searchForTargetsWithAI(icpParams: any, dbIcp: any): Promise<strin
     // the "don't include X" instruction in the prompt, since instructions
     // can occasionally be missed. A plain Set lookup can't be.
     const filtered = domains.filter(d => !EXCLUDED_DOMAIN_SET.has(d.toLowerCase().replace(/^www\./, "")));
-    return filtered.length > 0 ? filtered : domains;
+
+    // No `: domains` fallback. This used to read
+    //   return filtered.length > 0 ? filtered : domains
+    // which meant a search that returned *only* household names — the common
+    // case for a broad category query like "e-commerce companies in USA" —
+    // silently bypassed the filter and processed Amazon and Walmart as
+    // prospects, then reported success. Say what happened instead.
+    //
+    // `domains.length === 0` is a different failure and is left to the caller,
+    // which logs NO_RESULTS and tells the user to broaden their filters.
+    if (filtered.length === 0 && domains.length > 0) {
+      throw new Error(
+        `All ${domains.length} domains found were large enterprises excluded as unrealistic outbound leads ` +
+          `(${domains.slice(0, 5).join(", ")}). Narrow the ICP — a more specific industry, region or keyword ` +
+          `usually surfaces prospectable companies instead of category leaders.`
+      );
+    }
+    return filtered;
   } catch (error) {
     // No fake-domain fallback here either. Previously every failure in this
     // function — dead Groq key, network drop, unparseable JSON — was

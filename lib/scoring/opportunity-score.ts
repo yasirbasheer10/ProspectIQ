@@ -50,7 +50,7 @@ export function calculateOpportunityScore(input: ScoreInput): ScoreResult {
   };
 }
 
-function getGrade(score: number): "A" | "B" | "C" | "D" | "F" {
+export function getGrade(score: number): "A" | "B" | "C" | "D" | "F" {
   if (score >= 85) return "A";
   if (score >= 70) return "B";
   if (score >= 55) return "C";
@@ -58,18 +58,39 @@ function getGrade(score: number): "A" | "B" | "C" | "D" | "F" {
   return "F";
 }
 
+/**
+ * Colours for a score, keyed to the grade so the two never disagree.
+ *
+ * These were `text-emerald-400` / `text-amber-400` / `text-red-400` — Tailwind's
+ * 400 weights, which are meant for dark backgrounds. This app renders on
+ * `#F5F5F7` and white, where a 400 weight sits at roughly 2:1 contrast and is
+ * hard to read. The values below are Apple's accessible system colours for
+ * light backgrounds, which is the palette the rest of the UI already uses.
+ *
+ * They were also on their own threshold ladder (80/65/50/35) while `getGrade`
+ * used 85/70/55/40, so a score of 82 displayed as an "A" in blue but was graded
+ * B. One ladder now.
+ */
+const GRADE_TEXT_COLORS = {
+  A: "text-[#0071E3]", // systemBlue
+  B: "text-[#248A3D]", // systemGreen, accessible-light
+  C: "text-[#B25000]", // systemYellow, accessible-light (the raw #FFCC00 is unreadable on white)
+  D: "text-[#C93400]", // systemOrange, accessible-light
+  F: "text-[#D70015]", // systemRed, accessible-light
+} as const;
+
+const GRADE_BG_COLORS = {
+  A: "bg-[#0071E3]/10 border-[#0071E3]/20",
+  B: "bg-[#248A3D]/10 border-[#248A3D]/20",
+  C: "bg-[#B25000]/10 border-[#B25000]/20",
+  D: "bg-[#C93400]/10 border-[#C93400]/20",
+  F: "bg-[#D70015]/10 border-[#D70015]/20",
+} as const;
+
 export function getScoreColor(score: number): string {
-  if (score >= 80) return "text-emerald-400";
-  if (score >= 65) return "text-teal-400";
-  if (score >= 50) return "text-amber-400";
-  if (score >= 35) return "text-orange-400";
-  return "text-red-400";
+  return GRADE_TEXT_COLORS[getGrade(score)];
 }
 
 export function getScoreBgColor(score: number): string {
-  if (score >= 80) return "bg-emerald-500/10 border-emerald-500/20";
-  if (score >= 65) return "bg-teal-500/10 border-teal-500/20";
-  if (score >= 50) return "bg-amber-500/10 border-amber-500/20";
-  if (score >= 35) return "bg-orange-500/10 border-orange-500/20";
-  return "bg-red-500/10 border-red-500/20";
+  return GRADE_BG_COLORS[getGrade(score)];
 }

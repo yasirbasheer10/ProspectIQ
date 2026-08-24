@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { ArrowLeft, Globe, MapPin, Building, CheckCircle2, Sparkles, Lightbulb, X, Mail, Send, Loader2, BrainCircuit, RotateCcw } from "lucide-react";
 import Link from "next/link";
 import { triggerIntelligenceRun, generateOutreachAction, updateOutreachAction } from "./actions";
+import { getScoreColor, getGrade } from "@/lib/scoring/opportunity-score";
 
 interface Company360ClientProps {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -40,9 +41,14 @@ export function Company360Client({ company }: Company360ClientProps) {
     );
   }
 
-  // Derive highest score from opportunities
+  // Derive highest score from opportunities. No fallback: this used to read
+  // `?? (status === "DISCOVERED" ? null : 70 + (company.name.length % 25))`, so
+  // a company that had never been researched showed an invented 70-94 as its
+  // "Confidence Score" — and, worse, the invented number satisfied the `score ?`
+  // check below, which hid the "Run Intelligence" button that would have
+  // produced a real one.
   const scoreObj = company.opportunities?.[0]?.score;
-  const score = scoreObj?.overallScore || (company.status === "DISCOVERED" ? null : 70 + (company.name.length % 25));
+  const score: number | null = scoreObj?.overallScore ?? null;
 
   // Merge real evidence and signals
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -62,23 +68,6 @@ export function Company360Client({ company }: Company360ClientProps) {
   })) || [];
 
   const evidence = [...realEvidence, ...realSignals];
-
-  if (evidence.length === 0) {
-    evidence.push(
-      {
-        type: "VERIFIED FACT",
-        title: "Company recently redesigned checkout.",
-        source: "Website telemetry (Detected 48h ago)",
-        isAI: false,
-      },
-      {
-        type: "AI INSIGHT",
-        title: "Indicates focus on conversion optimization.",
-        source: "Correlated with recent engineering job postings for 'Frontend Performance'.",
-        isAI: true,
-      }
-    );
-  }
 
   const decisionMakers = company.contacts || [];
 
@@ -155,12 +144,14 @@ export function Company360Client({ company }: Company360ClientProps) {
             </h2>
             <div className="flex flex-col items-end">
               <span className="text-[11px] font-semibold text-[#86868B] uppercase tracking-widest mb-2">Confidence Score</span>
-              {score ? (
+              {score !== null ? (
                 <div className="flex items-center gap-3">
-                  <span className="text-6xl font-medium tracking-tighter text-[#0071E3]">{score}</span>
-                  {score > 80 && (
-                    <Badge variant="info" className="px-3 py-1 bg-[#0071E3]/10 text-[#0071E3] rounded-full text-xs font-semibold">High</Badge>
-                  )}
+                  <span className={`text-6xl font-medium tracking-tighter ${getScoreColor(score)}`}>{score}</span>
+                  {/* Was `score > 80 && <Badge>High</Badge>` — a third threshold
+                      that agreed with neither the grades nor the colours. */}
+                  <Badge variant="info" className="px-3 py-1 bg-[#0071E3]/10 text-[#0071E3] rounded-full text-xs font-semibold">
+                    Grade {getGrade(score)}
+                  </Badge>
                 </div>
               ) : (
                 <Button 
@@ -209,7 +200,7 @@ export function Company360Client({ company }: Company360ClientProps) {
               <h3 className="text-xl font-medium text-[#1D1D1F] mb-8">Evidence</h3>
               <div className="space-y-8 relative before:absolute before:inset-0 before:ml-[11px] before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-[#E5E5EA] before:to-transparent">
               {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-              {evidence.map((item: any, i: number) => (
+              {evidence.length > 0 ? evidence.map((item: any, i: number) => (
                 <div key={i} className="relative flex items-start gap-6">
                   <div className={`mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 ${item.isAI ? 'border-[#0071E3] bg-white' : 'border-[#E5E5EA] bg-[#F5F5F7]'} z-10`}>
                     {item.isAI ? <Sparkles size={12} className="text-[#0071E3]" /> : <CheckCircle2 size={12} className="text-[#86868B]" />}
@@ -222,7 +213,15 @@ export function Company360Client({ company }: Company360ClientProps) {
                     <p className="text-[13px] text-[#4B5563]">{item.source}</p>
                   </div>
                 </div>
-              ))}
+              )) : (
+                // This list used to be seeded with two fixtures when it was
+                // empty — "Company recently redesigned checkout", sourced to
+                // "Website telemetry (Detected 48h ago)" and labelled VERIFIED
+                // FACT. Nothing had been detected and there is no telemetry.
+                <p className="text-[#86868B] text-[14px]">
+                  No evidence collected yet. Run intelligence on this company to gather it.
+                </p>
+              )}
             </div>
           </div>
             
@@ -284,9 +283,11 @@ export function Company360Client({ company }: Company360ClientProps) {
                   <h3 className="text-xl font-medium text-[#1D1D1F]">Recommended Action</h3>
                 </div>
                 <p className="text-[14px] leading-relaxed text-[#4B5563] mb-8">
-                  {company.opportunities?.[0]?.recommendedService ? 
-                    `Initiate outbound sequence offering ${company.opportunities[0].recommendedService}. Highlight our relevant case studies to establish trust.` : 
-                    "Initiate outbound sequence focusing on our checkout friction reduction case studies. Mention their recent redesign to establish relevance."}
+                  {company.opportunities?.[0]?.recommendedService ?
+                    `Initiate outbound sequence offering ${company.opportunities[0].recommendedService}. Highlight our relevant case studies to establish trust.` :
+                    // Was "Mention their recent redesign to establish relevance"
+                    // — a specific claim about a company nothing had researched.
+                    "No recommendation yet. Run intelligence on this company to match it to one of your offers."}
                 </p>
                 <Button variant="primary" size="md" onClick={() => setDrawerOpen(true)} className="w-full justify-center">
                   Draft Outreach Sequence

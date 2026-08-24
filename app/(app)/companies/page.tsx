@@ -5,12 +5,18 @@ import { CompaniesClient } from "./CompaniesClient";
 export default async function CompaniesPage({
   searchParams,
 }: {
-  searchParams: { q?: string; page?: string };
+  // A promise since Next 15; the synchronous form was still tolerated then but
+  // is gone in 16. Typing it as a plain object made `searchParams?.q` read a
+  // property off the promise itself, which is always undefined — so the search
+  // box and pagination silently did nothing on a page load.
+  searchParams: Promise<{ q?: string; page?: string }>;
 }) {
   const workspaceId = await requireWorkspaceId();
 
-  const q = searchParams?.q || "";
-  const page = parseInt(searchParams?.page || "1");
+  const params = await searchParams;
+  const q = params.q || "";
+  // `?page=abc` used to give NaN, and NaN skip/take makes Prisma throw.
+  const page = Math.max(1, Number.parseInt(params.page || "1", 10) || 1);
   const pageSize = 50;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

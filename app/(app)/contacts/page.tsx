@@ -5,12 +5,15 @@ import { ContactsClient } from "./ContactsClient";
 export default async function ContactsPage({
   searchParams,
 }: {
-  searchParams: { q?: string; page?: string };
+  // See the note in `companies/page.tsx`: this is a promise in Next 16, and
+  // reading `.q` off it without awaiting gave undefined every time.
+  searchParams: Promise<{ q?: string; page?: string }>;
 }) {
   const workspaceId = await requireWorkspaceId();
 
-  const q = searchParams?.q || "";
-  const page = parseInt(searchParams?.page || "1");
+  const params = await searchParams;
+  const q = params.q || "";
+  const page = Math.max(1, Number.parseInt(params.page || "1", 10) || 1);
   const pageSize = 50;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

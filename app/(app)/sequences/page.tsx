@@ -4,10 +4,23 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { GitBranch, Plus, ChevronRight } from "lucide-react";
+import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireWorkspaceId } from "@/lib/session";
+import { FEATURES } from "@/lib/features";
 
+/**
+ * Sequences is a shell: the tables and this page exist, but nothing creates a
+ * sequence outside the demo seed and no code executes a step. Behind
+ * `ENABLE_SEQUENCES` until there is a scheduler to advance one.
+ *
+ * `notFound()` rather than a "coming soon" screen — the feature is not reachable
+ * from the nav, so the only way here is a typed URL or an old bookmark, and 404
+ * is the honest answer for a route that isn't serving anything.
+ */
 export default async function SequencesPage() {
+  if (!FEATURES.sequences) notFound();
+
   const workspaceId = await requireWorkspaceId();
 
   const sequences = await prisma.sequence.findMany({
@@ -18,8 +31,8 @@ export default async function SequencesPage() {
 
   return (
     <div className="flex h-full flex-col bg-white">
-      <Topbar 
-        title="Sequences" 
+      <Topbar
+        title="Sequences"
         actions={sequences.length > 0 ? <Button variant="primary" size="sm" icon={Plus}>Create Sequence</Button> : undefined}
       />
       <main className="flex-1 overflow-y-auto p-8 bg-[#F5F5F7]">

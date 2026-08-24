@@ -1,0 +1,41 @@
+# Line endings
+#
+# Everything in the repository is stored with LF. Windows checkouts still get
+# LF in the working tree, which is what Node, ESLint, Prisma and the test runner
+# all expect — the CRLF files this repo used to contain broke scripted edits
+# that matched on "\n}\n\n".
+#
+# NOTE: history before 2026-08-24 stored CRLF. Normalising it is a deliberate,
+# separate commit: `git add --renormalize .` then commit on its own, so the
+# whole-file diff does not hide a real change.
+* text=auto eol=lf
+
+# PowerShell is happier with CRLF, and these two are run by hand on Windows.
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Prisma stores a SHA-256 of each migration.sql in `_prisma_migrations` and
+# refuses to continue if the file no longer hashes to the recorded value. CRLF in
+# the working tree would change that hash, so these stay LF on every machine even
+# if the blanket rule above is ever relaxed.
+prisma/migrations/**/*.sql text eol=lf
+
+# Never touch these — normalisation corrupts them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.avif binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.pdf binary
+
+# Generated: collapse in diffs and reviews, they are not hand-edited.
+package-lock.json -diff linguist-generated

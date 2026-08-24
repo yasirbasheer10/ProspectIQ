@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { requireWorkspaceId } from "@/lib/session";
+import { FEATURES } from "@/lib/features";
 import { ConversationsClient } from "./ConversationsClient";
 
 export default async function ConversationsPage() {
@@ -22,5 +23,10 @@ export default async function ConversationsPage() {
     orderBy: { createdAt: 'desc' }
   });
 
-  return <ConversationsClient conversations={conversations} />;
+  return (
+    <ConversationsClient
+      conversations={conversations}
+      outboundSendingEnabled={FEATURES.outboundSending}
+    />
+  );
 }

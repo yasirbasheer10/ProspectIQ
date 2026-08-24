@@ -10,15 +10,13 @@ import { Filter, Search, Globe, Users, ArrowRight, Trash2, Loader2, CheckSquare,
 import { useRouter } from "next/navigation";
 import { deleteCompany, bulkDeleteCompanies } from "./actions";
 import { useListState } from "@/hooks/useListState";
+import { getScoreColor } from "@/lib/scoring/opportunity-score";
 
 function ScoreDot({ score }: { score: number | null }) {
   if (score === null) return <span className="text-[#86868B] text-[13px]">—</span>;
-  const color =
-    score >= 80 ? "text-[#0071E3]" :
-    score >= 65 ? "text-[#34C759]" :
-    score >= 50 ? "text-[#FFCC00]" :
-    "text-[#FF3B30]";
-  return <span className={`text-[14px] font-semibold ${color}`}>{score}</span>;
+  // Was a second copy of the score-to-colour ladder, on thresholds that
+  // disagreed with the grades. One definition, in the scoring module.
+  return <span className={`text-[14px] font-semibold ${getScoreColor(score)}`}>{score}</span>;
 }
 
 interface CompaniesClientProps {
@@ -33,7 +31,6 @@ interface CompaniesClientProps {
 export function CompaniesClient({ companies, totalItems, totalPages, currentPage, searchQueryParam }: CompaniesClientProps) {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState(searchQueryParam);
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isPending, startTransition] = useTransition();
 
   const {
@@ -160,9 +157,14 @@ export function CompaniesClient({ companies, totalItems, totalPages, currentPage
               </thead>
               <tbody className="bg-white">
                 {companies.length > 0 ? companies.map((company) => {
-                  const scoreObj = company.opportunities?.[0]?.score;
-                  const mockScore = scoreObj ? scoreObj.overallScore : (company.status === "DISCOVERED" || company.status === "RESEARCHING" ? null : 70 + (company.name.length % 25));
-                  const mockSignals = company._count?.signals ?? (company.status === "DISCOVERED" ? 0 : 1 + (company.name.length % 3));
+                  // Both of these used to fall back to arithmetic on the
+                  // company's *name length* — `70 + (name.length % 25)` for the
+                  // score and `1 + (name.length % 3)` for the signal count — so
+                  // an unresearched company displayed a confident-looking 70-94
+                  // and a signal badge, neither of which existed. A company with
+                  // no score shows no score.
+                  const score = company.opportunities?.[0]?.score?.overallScore ?? null;
+                  const signalCount = company._count?.signals ?? 0;
                   const isDeleting = deletingId === company.id;
                   const isSelected = selectedIds.has(company.id);
 
@@ -210,11 +212,11 @@ export function CompaniesClient({ companies, totalItems, totalPages, currentPage
                         <CompanyStatusBadge status={company.status} />
                       </td>
                       <td className="text-center">
-                        <ScoreDot score={mockScore} />
+                        <ScoreDot score={score} />
                       </td>
                       <td className="text-center">
-                        {mockSignals > 0 ? (
-                          <Badge variant="info" className="px-1.5 py-0.5">{mockSignals}</Badge>
+                        {signalCount > 0 ? (
+                          <Badge variant="info" className="px-1.5 py-0.5">{signalCount}</Badge>
                         ) : (
                           <span className="text-[#86868B] text-[13px]">—</span>
                         )}

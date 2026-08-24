@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { requireWorkspaceId } from "@/lib/session";
+import { FEATURES } from "@/lib/features";
 import { OutreachClient } from "./OutreachClient";
 
 export default async function OutreachPage() {
@@ -32,25 +33,13 @@ export default async function OutreachPage() {
     preview: msg.body.substring(0, 150) + (msg.body.length > 150 ? "..." : "")
   }));
 
-  // fallback to fixtures if empty for demo purposes
-  const finalQueue = queue.length > 0 ? queue : [
-    {
-      id: "out-1",
-      contact: "Sarah Jenkins",
-      company: "Acme Commerce",
-      subject: "Reducing friction in Acme's checkout flow",
-      status: "PENDING_APPROVAL",
-      preview: "Hi Sarah, I noticed Acme Commerce recently redesigned its checkout flow...",
-    },
-    {
-      id: "out-2",
-      contact: "Marcus Chen",
-      company: "Vertalo Group",
-      subject: "Scaling agency outbound without adding headcount",
-      status: "PENDING_APPROVAL",
-      preview: "Hi Marcus, congrats on joining Vertalo from Salesforce. Having led EMEA partnerships...",
-    }
-  ];
-
-  return <OutreachClient initialQueue={finalQueue} />;
+  // No fixture fallback. This list used to be seeded with two invented drafts
+  // ("Sarah Jenkins" at "Acme Commerce", "Marcus Chen" at "Vertalo Group")
+  // whenever the queue was empty, which meant the "You're all caught up" empty
+  // state could never appear — and clicking "Approve & Send" on one optimistically
+  // removed the card, then threw server-side because no such message exists. The
+  // screen reported sending a message that was never real.
+  return (
+    <OutreachClient initialQueue={queue} outboundSendingEnabled={FEATURES.outboundSending} />
+  );
 }

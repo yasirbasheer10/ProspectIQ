@@ -29,9 +29,14 @@ If you change the structure of the app, update `PROJECT-MAP.md`. If you fix some
   Roll back with `.\scripts\undo.ps1`.
 - The app has no external users — the live Vercel site is the owner's own test environment. Don't
   propose pull requests, preview environments or branch protection.
-- Never put database commands in the `build` script. Schema changes are deliberate and separate:
-  edit `prisma/schema.prisma`, then run `npx prisma db push` as a one-off. The build previously ran
-  `prisma db push --accept-data-loss` on every deploy and could drop live columns.
-- There is no `prisma/migrations/` directory. Treat any schema change as unreviewable and
-  irreversible until migrations are introduced.
+- Never put database commands in the `build` script. It stays `prisma generate && next build`. The
+  build previously ran `prisma db push --accept-data-loss` on every deploy and could drop live
+  columns.
+- Schema changes go through migrations, and `prisma/README.md` is the procedure — read it before
+  touching `prisma/schema.prisma`. Short version: edit the schema, generate the SQL with
+  `prisma migrate diff --from-config-datasource --to-schema`, **read the SQL**, apply with
+  `prisma migrate deploy`, commit schema and migration together.
+- Don't use `prisma db push` (no migration is written, so the history stops describing the database)
+  or `prisma migrate dev` (needs a shadow database, and offers to reset the only one there is).
+  Neither is in `package.json` any more.
 
