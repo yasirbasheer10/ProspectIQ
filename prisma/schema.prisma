@@ -108,6 +108,7 @@ enum AgentRunType {
   DEMO_SEED
   DRAFT_OUTREACH
   ORCHESTRATOR
+  GROWTH_AUDIT
 }
 
 enum SignalType {
@@ -153,6 +154,7 @@ model User {
 
   workspaces  WorkspaceMember[]
   agentRuns   AgentRun[]
+  growthAudits GrowthAudit[]
 
   @@map("users")
 }
@@ -184,6 +186,21 @@ model Workspace {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  // Agency branding and sender identity.
+  //
+  // ProspectIQ's own customers are agencies, and two features need to sign work
+  // as *them* rather than as ProspectIQ: a Growth Audit carries the agency's
+  // logo and colour because the agency's prospect reads it, and the outreach
+  // prompt currently hardcodes the sender as "Yasir". Both read from here.
+  //
+  // All nullable on purpose — existing workspaces predate these columns, and
+  // every consumer has to cope with an agency that hasn't filled them in yet.
+  brandColor  String?  // hex, e.g. "#1d4ed8" — accents in the audit
+  senderName  String?  // the human the prospect should think wrote this
+  senderTitle String?  // e.g. "Head of Growth"
+  senderEmail String?  // reply-to shown on the audit
+  websiteUrl  String?  // the agency's own site, linked from the audit footer
+
   members     WorkspaceMember[]
   icps        ICP[]
   offers      Offer[]
@@ -196,6 +213,7 @@ model Workspace {
   agentRuns   AgentRun[]
   suppressions Suppression[]
   activities  Activity[]
+  growthAudits GrowthAudit[]
 
   @@map("workspaces")
 }
@@ -325,6 +343,7 @@ model Company {
   opportunities   Opportunity[]
   contacts        Contact[]
   activities      Activity[]
+  growthAudits    GrowthAudit[]
 
   @@unique([workspaceId, domain])
   @@index([workspaceId])
@@ -714,11 +733,83 @@ model AgentRun {
   user        User?          @relation(fields: [userId], references: [id])
   workspaceId String?
   workspace   Workspace?     @relation(fields: [workspaceId], references: [id])
+  growthAudit GrowthAudit?
 
   @@index([userId])
   @@index([workspaceId])
   @@index([status])
   @@map("agent_runs")
+}
+
+// ─────────────────────────────────────────────────────────────
+// GROWTH AUDIT
+// ─────────────────────────────────────────────────────────────
+
+// A report an agency generates about one prospect and then sends *to* that
+// prospect to win the work.
+//
+// This is not a second pipeline. It is the existing pipeline read the other way
+// round: discovery, intelligence and scoring already write about a company for
+// the agency's eyes, and an audit is written about that same company for the
+// company's own eyes. Keep that distinction or this becomes a copy of Discovery.
+model GrowthAudit {
+  id            String         @id @default(cuid())
+
+  // Not the cuid. This token is the only thing between a public URL and someone
+  // else's audit, and cuids are sequential enough to guess neighbours from, so
+  // it is 32 random bytes generated in code.
+  shareToken    String         @unique
+
+  // Reuses AgentRunStatus rather than declaring another status enum — QUEUED,
+  // RUNNING, COMPLETED and FAILED are exactly the states an audit has.
+  status        AgentRunStatus @default(QUEUED)
+  errorMessage  String?
+
+  // The audit's own AgentRun, so the work shows up in the activity feed like
+  // every other run and sweepStaleRuns can mark it dead if a serverless timeout
+  // kills it mid-generation. One run produces at most one audit, hence @unique.
+  agentRunId    String?        @unique
+  agentRun      AgentRun?      @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+
+  headline      String?
+  summary       String?
+
+  // The body, as an array of section objects. Json because the shape of an audit
+  // will change several more times and none of those changes should cost a
+  // migration; the zod schema in lib/ai/schemas.ts is what enforces the shape.
+  sections      Json?
+
+  // Real columns rather than fields inside `sections`, so a list of audits can be
+  // sorted and filtered by the database.
+  auditScore    Float?
+  auditGrade    String?
+
+  // The agency's logo, colour and sender details copied in at generation time.
+  // Frozen on purpose: an audit already sent to a prospect has to keep looking
+  // the way it looked when it was sent, even after the agency rebrands.
+  brandSnapshot Json?
+
+  viewCount     Int            @default(0)
+  lastViewedAt  DateTime?
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  completedAt   DateTime?
+
+  workspaceId   String
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  companyId     String
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdByUserId String?
+  createdByUser User?          @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  // Deliberately no @@unique([workspaceId, companyId]) — re-auditing a prospect
+  // months later is a normal thing to want, and the old audit's share link has to
+  // keep working after you do.
+  @@index([workspaceId])
+  @@index([companyId])
+  @@index([status])
+  @@map("growth_audits")
 }
 
 // ─────────────────────────────────────────────────────────────

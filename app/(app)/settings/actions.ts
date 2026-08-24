@@ -89,3 +89,74 @@ export async function updateWorkspaceSettings(input: unknown) {
 
   revalidatePath("/settings");
 }
+
+/**
+ * The agency's letterhead.
+ *
+ * A separate action with its own save button rather than another branch of
+ * `SettingsSchema`, because these fields have nothing to do with the ICP or the
+ * offer and an agency should not have to get the discovery form right before it
+ * can put its logo on an audit.
+ *
+ * Everything here ends up on a page the agency's prospect opens, so each field is
+ * validated at write time rather than trusted and patched over at render time.
+ */
+const BrandingSchema = z.object({
+  logoUrl: z
+    .string()
+    .trim()
+    .max(2000)
+    // http(s) only. A logo URL is interpolated into `<img src>` on a public page,
+    // so `javascript:`, `data:` and friends are refused outright rather than
+    // sanitised — there is no legitimate logo that needs them.
+    .refine((v) => v === "" || /^https:\/\/|^http:\/\//i.test(v), {
+      message: "The logo URL needs to start with https://",
+    })
+    .optional()
+    .default(""),
+  brandColor: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .refine((v) => v === "" || /^#(?:[0-9A-F]{3}|[0-9A-F]{6})$/.test(v), {
+      message: "Use a hex colour like #0071E3.",
+    })
+    .optional()
+    .default(""),
+  senderName: z.string().trim().max(120).optional().default(""),
+  senderTitle: z.string().trim().max(120).optional().default(""),
+  senderEmail: z
+    .string()
+    .trim()
+    .max(200)
+    .refine((v) => v === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), {
+      message: "That does not look like an email address.",
+    })
+    .optional()
+    .default(""),
+  websiteUrl: z.string().trim().max(2000).optional().default(""),
+});
+
+export async function updateAuditBranding(input: unknown) {
+  const workspaceId = await requireWorkspaceId();
+  const data = BrandingSchema.parse(input);
+
+  // Empty strings become null. A blank field means "I have not set this", and the
+  // audit renderer already skips null — storing "" instead would render an empty
+  // signature line on a document a prospect reads.
+  const blankToNull = (v: string) => (v === "" ? null : v);
+
+  await prisma.workspace.update({
+    where: { id: workspaceId },
+    data: {
+      logoUrl: blankToNull(data.logoUrl),
+      brandColor: blankToNull(data.brandColor),
+      senderName: blankToNull(data.senderName),
+      senderTitle: blankToNull(data.senderTitle),
+      senderEmail: blankToNull(data.senderEmail),
+      websiteUrl: blankToNull(data.websiteUrl),
+    },
+  });
+
+  revalidatePath("/settings");
+}

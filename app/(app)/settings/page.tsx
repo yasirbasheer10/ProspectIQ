@@ -22,6 +22,16 @@ export default async function SettingsPage() {
       initialDemoMode={workspace?.isDemo ?? true}
       icp={icp}
       offer={offer}
+      // Nulls become "" here rather than in the client: a controlled <input> with
+      // a null value warns and then silently becomes uncontrolled.
+      branding={{
+        logoUrl: workspace?.logoUrl ?? "",
+        brandColor: workspace?.brandColor ?? "",
+        senderName: workspace?.senderName ?? "",
+        senderTitle: workspace?.senderTitle ?? "",
+        senderEmail: workspace?.senderEmail ?? "",
+        websiteUrl: workspace?.websiteUrl ?? "",
+      }}
     />
   );
 }

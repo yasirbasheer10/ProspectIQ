@@ -68,108 +68,27 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
       data: { totalItems: domainsToScrape.length }
     });
 
-    // 3. Jina AI Reader Scraping & AI Extraction — processed in small concurrent
-    //    batches instead of one domain at a time, to cut wall-clock time while
-    //    staying under free-tier per-minute rate limits (Jina + Gemini Flash).
+    // 3. Scrape and extract each domain — processed in small concurrent batches
+    //    instead of one at a time, to cut wall-clock time while staying under
+    //    free-tier per-minute rate limits (Jina + Groq).
+    //
+    //    The per-domain work itself lives in `ingestDomain` below, so the Growth
+    //    Audit can put a single pasted URL through the same path instead of
+    //    growing a second, subtly different scraper. Discovery's own contract is
+    //    that one bad domain must never abort a 40-domain run, so both kinds of
+    //    failure are swallowed here — see the note on `ingestDomain`.
     const processDomain = async (domain: string) => {
       try {
-        await logActivity(workspaceId, "SCRAPE_START", `Analyzing ${domain}`, `Initiating deep-dive research on ${domain}...`);
-        
-        // Ensure https
-        const url = domain.startsWith("http") ? domain : `https://${domain}`;
-
-        // Use Jina AI Reader — handles JS-heavy sites, anti-bot, returns clean Markdown
-        let combinedText = "";
-        try {
-          const jinaKey = process.env.JINA_API_KEY;
-          const jinaUrl = `https://r.jina.ai/${url}`;
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 20000);
-
-          const jinaResponse = await fetch(jinaUrl, {
-            signal: controller.signal,
-            headers: {
-              'Authorization': jinaKey ? `Bearer ${jinaKey}` : '',
-              'Accept': 'text/plain',
-              'X-Return-Format': 'markdown',
-            }
-          });
-          clearTimeout(timeoutId);
-
-          if (jinaResponse.ok) {
-            const markdown = await jinaResponse.text();
-            // Cap at 15k chars — Gemini can handle far more but we keep prompts focused
-            combinedText = sanitizeText(markdown).substring(0, 15000);
-          } else {
-            console.warn(`Jina failed for ${url}: ${jinaResponse.status}`);
-          }
-        } catch (e) {
-          console.error(`Jina fetch failed for ${url}:`, e);
-        }
-
-        // 4. Intelligence Extraction via AI
-        await logActivity(workspaceId, "AI_ANALYSIS", `Extracting Intelligence`, `Running proprietary models to parse firmographics and signals for ${domain}.`);
-        
-        const extractedData = await extractCompanyData(combinedText, url);
-        
-        if (extractedData && extractedData.name) {
-          // 5. Persistence
-          const company = await prisma.company.upsert({
-            where: {
-              workspaceId_domain: {
-                workspaceId,
-                domain: extractedData.domain
-              }
-            },
-            create: {
-              workspaceId,
-              name: extractedData.name,
-              domain: extractedData.domain,
-              website: url,
-              industry: extractedData.industry || "Software",
-              description: extractedData.description,
-              employeeRange: extractedData.companySize || "Unknown",
-              headquarters: extractedData.location || null
-            },
-            update: {
-              name: extractedData.name,
-              industry: extractedData.industry || "Software",
-              description: extractedData.description,
-              headquarters: extractedData.location || null
-            }
-          });
-
-          await logActivity(workspaceId, "COMPANY_DISCOVERED", `Discovered ${company.name}`, `Added to target list. Industry: ${company.industry}`);
-
-          // Save Signals
-          if (extractedData.signals && extractedData.signals.length > 0) {
-            for (const sig of extractedData.signals) {
-              await prisma.signal.create({
-                data: {
-                  companyId: company.id,
-                  type: sig.type, // Already narrowed to a valid SignalType by the schema
-                  title: sig.title,
-                  description: sig.description,
-                  sourceUrl: url,
-                  sourceName: "Website Scraping",
-                  // Not scored. This was hardcoded to 0.9 — a confidence number
-                  // nothing had actually measured. Left null until something does.
-                  relevance: null,
-                }
-              });
-            }
-            await logActivity(workspaceId, "SIGNAL_DETECTED", `Found ${extractedData.signals.length} Signals`, `Detected buying signals for ${company.name}.`);
-          }
-        } else {
-          await logActivity(workspaceId, "SCRAPE_FAILED", `Could not analyze ${domain}`, `Failed to extract meaningful firmographic data.`);
-        }
-
-        // Increment processed items
-        await prisma.agentRun.update({
-          where: { id: agentRunId },
-          data: { processedItems: { increment: 1 } }
+        const result = await ingestDomain({
+          domain,
+          workspaceId,
+          source: "discovery",
+          agentRunId,
         });
 
+        if (!result.companyId) {
+          await logActivity(workspaceId, "SCRAPE_FAILED", `Could not analyze ${domain}`, result.reason ?? "Failed to extract meaningful firmographic data.");
+        }
       } catch (err: unknown) {
         console.error(`Failed to process domain ${domain}:`, err);
         await logActivity(workspaceId, "SCRAPE_FAILED", `Error analyzing ${domain}`, err instanceof Error ? err.message : "Unknown error");
@@ -177,7 +96,7 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
     };
 
     // Process in batches of 3 concurrently — enough to meaningfully cut total
-    // runtime without bursting past free-tier RPM ceilings on Jina/Gemini.
+    // runtime without bursting past free-tier RPM ceilings on Jina/Groq.
     const BATCH_SIZE = 3;
     for (let i = 0; i < domainsToScrape.length; i += BATCH_SIZE) {
       const batch = domainsToScrape.slice(i, i + BATCH_SIZE);
@@ -204,6 +123,173 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
       data: { status: "FAILED", errorMessage: reason, completedAt: new Date() }
     });
   }
+}
+
+export interface IngestDomainParams {
+  /** A bare domain or a full URL — `https://` is added when it's missing. */
+  domain: string;
+  workspaceId: string;
+  /**
+   * Written to `Company.discoverySource`, and only when the row is first
+   * created: how you first found a company doesn't change because you looked at
+   * it again. Lets a prospect that exists only because someone ran an audit on
+   * it be told apart from one the discovery engine went looking for, which
+   * matters as soon as pipeline counts are meant to mean anything.
+   */
+  source: string;
+  /** When given, that run's `processedItems` is incremented once per domain. */
+  agentRunId?: string;
+}
+
+export interface IngestDomainResult {
+  /** Null when the page yielded nothing usable — `reason` says why. */
+  companyId: string | null;
+  name: string | null;
+  signalCount: number;
+  /** Only set when `companyId` is null. */
+  reason?: string;
+}
+
+/**
+ * Scrape one website, pull firmographics and buying signals out of it, and upsert
+ * the `Company` (plus any `Signal` rows) into a workspace.
+ *
+ * Lifted out of the middle of `runDiscoveryEngine` so the Growth Audit can put a
+ * single pasted URL through this exact path rather than growing a second, subtly
+ * different scraper that drifts from it.
+ *
+ * There are two kinds of failure here and callers genuinely need to tell them
+ * apart:
+ *
+ *   - **Soft** — the fetch or the model gave us nothing usable. Returns
+ *     `companyId: null` with a `reason`. For discovery that's one dud page out of
+ *     forty, so it logs and moves on; for an audit it's the whole job, so it's
+ *     fatal. Only the caller knows which.
+ *   - **Hard** — something threw: the database, the network, a rejected insert.
+ *     Rethrown, because it says nothing about this domain and will probably
+ *     happen again on the next one.
+ */
+export async function ingestDomain(params: IngestDomainParams): Promise<IngestDomainResult> {
+  const { domain, workspaceId, source, agentRunId } = params;
+
+  await logActivity(workspaceId, "SCRAPE_START", `Analyzing ${domain}`, `Initiating deep-dive research on ${domain}...`);
+
+  // Ensure https
+  const url = domain.startsWith("http") ? domain : `https://${domain}`;
+
+  // Use Jina AI Reader — handles JS-heavy sites, anti-bot, returns clean Markdown
+  let combinedText = "";
+  try {
+    const jinaKey = process.env.JINA_API_KEY;
+    const jinaUrl = `https://r.jina.ai/${url}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+    const jinaResponse = await fetch(jinaUrl, {
+      signal: controller.signal,
+      headers: {
+        'Authorization': jinaKey ? `Bearer ${jinaKey}` : '',
+        'Accept': 'text/plain',
+        'X-Return-Format': 'markdown',
+      }
+    });
+    clearTimeout(timeoutId);
+
+    if (jinaResponse.ok) {
+      const markdown = await jinaResponse.text();
+      // Cap at 15k chars — the model can handle far more, but we keep prompts focused
+      combinedText = sanitizeText(markdown).substring(0, 15000);
+    } else {
+      console.warn(`Jina failed for ${url}: ${jinaResponse.status}`);
+    }
+  } catch (e) {
+    console.error(`Jina fetch failed for ${url}:`, e);
+  }
+
+  // Intelligence extraction via AI
+  await logActivity(workspaceId, "AI_ANALYSIS", `Extracting Intelligence`, `Running proprietary models to parse firmographics and signals for ${domain}.`);
+
+  const extractedData = await extractCompanyData(combinedText, url);
+
+  // `ExtractedCompanySchema` requires a non-empty name and domain, so a parsed
+  // response always has both; a null here means the fetch came back empty or the
+  // model's reply failed validation. Distinguish those two in the reason, because
+  // "the site blocked us" and "the model wrote nonsense" need different fixes.
+  if (!extractedData || !extractedData.name) {
+    await bumpProcessedItems(agentRunId);
+    return {
+      companyId: null,
+      name: null,
+      signalCount: 0,
+      reason: combinedText
+        ? "Read the site, but could not extract meaningful firmographic data from it."
+        : `Could not read ${url} — it returned nothing readable (blocked, empty, or timed out).`,
+    };
+  }
+
+  const company = await prisma.company.upsert({
+    where: {
+      workspaceId_domain: {
+        workspaceId,
+        domain: extractedData.domain
+      }
+    },
+    create: {
+      workspaceId,
+      name: extractedData.name,
+      domain: extractedData.domain,
+      website: url,
+      industry: extractedData.industry || "Software",
+      description: extractedData.description,
+      employeeRange: extractedData.companySize || "Unknown",
+      headquarters: extractedData.location || null,
+      discoverySource: source
+    },
+    update: {
+      name: extractedData.name,
+      industry: extractedData.industry || "Software",
+      description: extractedData.description,
+      headquarters: extractedData.location || null
+      // discoverySource deliberately absent — see IngestDomainParams.source.
+    }
+  });
+
+  await logActivity(workspaceId, "COMPANY_DISCOVERED", `Discovered ${company.name}`, `Added to target list. Industry: ${company.industry}`);
+
+  // Save Signals
+  let signalCount = 0;
+  if (extractedData.signals && extractedData.signals.length > 0) {
+    for (const sig of extractedData.signals) {
+      await prisma.signal.create({
+        data: {
+          companyId: company.id,
+          type: sig.type, // Already narrowed to a valid SignalType by the schema
+          title: sig.title,
+          description: sig.description,
+          sourceUrl: url,
+          sourceName: "Website Scraping",
+          // Not scored. This was hardcoded to 0.9 — a confidence number
+          // nothing had actually measured. Left null until something does.
+          relevance: null,
+        }
+      });
+    }
+    signalCount = extractedData.signals.length;
+    await logActivity(workspaceId, "SIGNAL_DETECTED", `Found ${signalCount} Signals`, `Detected buying signals for ${company.name}.`);
+  }
+
+  await bumpProcessedItems(agentRunId);
+
+  return { companyId: company.id, name: company.name, signalCount };
+}
+
+/** No-op when there's no run to report against, e.g. a one-off audit. */
+async function bumpProcessedItems(agentRunId?: string) {
+  if (!agentRunId) return;
+  await prisma.agentRun.update({
+    where: { id: agentRunId },
+    data: { processedItems: { increment: 1 } }
+  });
 }
 
 // ─── Helpers ───────────────────────────────────────────────────

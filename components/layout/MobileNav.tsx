@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Menu, X, LayoutDashboard, Telescope, Building2, Lightbulb, Users, Send, GitBranch, MessageSquare, BarChart3, Bot } from "lucide-react";
+import { Menu, X, LayoutDashboard, Telescope, Building2, Lightbulb, FileSearch, Users, Send, GitBranch, MessageSquare, BarChart3, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { label: "Discover", href: "/discovery", icon: Telescope },
   { label: "Companies", href: "/companies", icon: Building2 },
   { label: "Opportunities", href: "/opportunities", icon: Lightbulb },
+  { label: "Growth Audits", href: "/audits", icon: FileSearch },
   { label: "Contacts", href: "/contacts", icon: Users },
   { label: "Outreach", href: "/outreach", icon: Send },
   { label: "Conversations", href: "/conversations", icon: MessageSquare },

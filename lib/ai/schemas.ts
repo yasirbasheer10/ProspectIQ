@@ -199,6 +199,108 @@ export const ConversationReplySchema = z.object({
 });
 
 // ─────────────────────────────────────────────────────────────
+// GROWTH AUDIT
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * The areas a finding can sit in.
+ *
+ * Deliberately generic business areas rather than marketing ones. ProspectIQ's
+ * customers are white-label outsourcing agencies of every kind — a dev shop, a
+ * staffing firm and a paid-ads agency all generate audits from here, and a fixed
+ * set of marketing categories would be meaningless to two of the three. These six
+ * are readable through any of those lenses, which also gives the scorecard stable
+ * dimensions to report against.
+ */
+export const AUDIT_AREAS = [
+  "POSITIONING",  // whether a visitor can tell what they sell, and to whom
+  "ACQUISITION",  // how new customers find them
+  "CONVERSION",   // turning interest into revenue
+  "DELIVERY",     // capacity to actually serve the customers they win
+  "RETENTION",    // keeping the customers they have
+  "TECHNOLOGY",   // the stack, and what it is costing them
+] as const;
+
+export const AuditAreaSchema = z.enum(AUDIT_AREAS).catch("POSITIONING");
+
+/**
+ * How much a finding matters. The model judges severity; it does **not** produce
+ * the numeric score — `lib/scoring/audit-score.ts` computes that in code from
+ * these severities, so two audits of equally healthy companies can't disagree
+ * because the model was in a different mood.
+ */
+export const AUDIT_SEVERITIES = ["HIGH", "MEDIUM", "LOW"] as const;
+export const AuditSeveritySchema = z.enum(AUDIT_SEVERITIES).catch("MEDIUM");
+
+/**
+ * How much work a fix is. `QUICK_WIN` is the one that earns replies — a prospect
+ * who can act on something this week is a prospect who answers the email.
+ */
+export const AUDIT_EFFORTS = ["QUICK_WIN", "PROJECT", "ONGOING"] as const;
+export const AuditEffortSchema = z.enum(AUDIT_EFFORTS).catch("PROJECT");
+
+export type AuditArea = (typeof AUDIT_AREAS)[number];
+export type AuditSeverity = (typeof AUDIT_SEVERITIES)[number];
+export type AuditEffort = (typeof AUDIT_EFFORTS)[number];
+
+/**
+ * `generateGrowthAudit` — a prospect-facing audit of one company.
+ *
+ * Read this next to `IntelligenceSchema` and the difference is the whole feature:
+ * intelligence is written *about* a company *for* the agency chasing it, and an
+ * audit is written about that same company *for the company itself*. So nothing
+ * here may leak the sales process — no fit scores, no buyer confidence, no
+ * contactability. Those measure how easy the prospect is to sell to, and showing
+ * a prospect that would end the relationship rather than start it.
+ *
+ * Required fields are required on purpose:
+ *   - `findings` must be non-empty. An audit with nothing in it isn't a thin
+ *     audit, it's a failed one, and failing loudly beats emailing a prospect a
+ *     document with no observations in it.
+ *   - every finding needs a `recommendation`. An observation with no proposed fix
+ *     is a complaint, and the agency is sending this to win work.
+ *
+ * `strengths` is not decoration. An audit that is purely critical reads as an
+ * attack and gets deleted; naming what already works buys the credibility that
+ * makes the criticism land.
+ */
+export const GrowthAuditSchema = z.object({
+  headline: z.string().min(1),
+  summary: z.string().min(1),
+  findings: z
+    .array(
+      z.object({
+        area: AuditAreaSchema,
+        severity: AuditSeveritySchema,
+        effort: AuditEffortSchema,
+        title: z.string().min(1),
+        /** What was actually observed. Grounded in the evidence handed to the prompt. */
+        observation: z.string().min(1),
+        /** Why it costs them something. Nullish — better empty than invented. */
+        impact: z.string().nullish(),
+        recommendation: z.string().min(1),
+        /**
+         * Ids of the `Evidence` rows this finding rests on. The prompt supplies
+         * the ids, so anything not in that list is the model inventing a citation
+         * and the caller drops it — same guard as `OutreachSchema.evidence_used_ids`.
+         */
+        evidenceIds: arrayOf(z.string()),
+        /**
+         * Which of the agency's `Offer.services[]` would fix this. Nullish so a
+         * genuine observation isn't discarded for lacking one, but a finding with
+         * no service behind it sells nothing — the caller counts these, because a
+         * whole audit of them means the offer needs filling in, not the prompt.
+         */
+        matchedService: z.string().nullish(),
+      })
+    )
+    .min(1),
+  strengths: arrayOf(z.string()),
+  /** The single concrete ask at the end. */
+  nextStep: z.string().nullish(),
+});
+
+// ─────────────────────────────────────────────────────────────
 // PARSER
 // ─────────────────────────────────────────────────────────────
 
