@@ -299,6 +299,12 @@ export async function searchForLookalikes(input: unknown) {
   for (const country of profile.geographies) countries[country] = ["ALL"];
 
   return startDiscovery({
+    // Labels every company this search adds for the first time, so a prospect
+    // that only exists because of a lookalike search stays distinguishable from
+    // one the agency went looking for by hand. Companies it re-finds keep their
+    // original label — `Company.discoverySource` records how you *first* met
+    // them, which is why the Companies page filters by run instead of by this.
+    source: "lookalike",
     icpParams: {
       countries,
       industries: profile.industries,

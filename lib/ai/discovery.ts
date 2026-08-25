@@ -1,4 +1,5 @@
-import type { z } from "zod";
+import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logActivity } from "@/lib/activity";
 import { ai, MODEL } from "./groq";
@@ -10,6 +11,15 @@ interface DiscoveryParams {
   workspaceId: string;
   agentRunId: string;
   customDomains?: string[];
+  /**
+   * Written to `Company.discoverySource` for companies this run adds for the
+   * first time. Defaults to `"discovery"`; the lookalike search passes
+   * `"lookalike"` so a company first met by "find companies like these" can be
+   * told apart from one the operator went looking for by hand.
+   *
+   * Only affects rows this run *creates* — see `IngestDomainParams.source`.
+   */
+  source?: string;
   icpParams?: {
     countries: Record<string, string[]>;
     industries: string[];
@@ -19,8 +29,65 @@ interface DiscoveryParams {
   }
 }
 
+/**
+ * What a finished discovery run records about its own results, on
+ * `AgentRun.outputData`.
+ *
+ * The point of storing this is that nothing else in the schema can answer "which
+ * companies did *this run* return". `Company` has no link back to an `AgentRun`,
+ * and `discoverySource` cannot stand in for one: it is written once, when the row
+ * is created, so a run that re-finds a company somebody already had leaves no
+ * trace on it at all. Without this blob the Companies page can only ever show
+ * every company in the workspace.
+ *
+ * **Company ids, deliberately, not domains.** The domain that goes *into* a run
+ * is not reliably the domain that comes out: `Company.domain` is set from
+ * `ExtractedCompanySchema.domain`, which is whatever the model wrote after
+ * reading the page — `www.` prefixes, redirect targets and country variants all
+ * happen. Matching a stored request list back against `Company.domain` would
+ * silently drop those rows. Ids come straight from the upsert, so they cannot
+ * drift, and `id IN (...)` is a primary-key lookup rather than a string scan.
+ */
+export interface StoredDiscoveryOutput {
+  /** Companies that came back, deduped. Ordered by when each one finished. */
+  companyIds: string[];
+  /** How many domains the run set out to read, including the ones that failed. */
+  requestedDomains: number;
+}
+
+const StoredDiscoveryOutputSchema = z.object({
+  // `.catch([])` rather than a hard requirement: a run whose output blob is
+  // half-written should degrade to "no results recorded", which the Companies
+  // page can report honestly, instead of failing the whole page load.
+  companyIds: z.array(z.string()).catch([]),
+  requestedDomains: z.number().int().nonnegative().catch(0),
+});
+
+/**
+ * Validate an `AgentRun.outputData` blob written by `runDiscoveryEngine`.
+ *
+ * Returns null for anything that is not recognisably one of these, including the
+ * `outputData` of every discovery run that finished before this was added — those
+ * are simply `null`, and callers must treat "no record" as different from "no
+ * results". Same contract as `parseStoredLookalikeProfile`: `outputData` is
+ * `Json?`, which TypeScript sees as `any`, so the compiler cannot help here.
+ */
+export function parseStoredDiscoveryOutput(outputData: unknown): StoredDiscoveryOutput | null {
+  if (outputData === null || typeof outputData !== "object" || Array.isArray(outputData)) {
+    return null;
+  }
+  // A run from another engine (the orchestrator writes `currentStep`, the
+  // intelligence run writes `rawOutput`) would otherwise pass, because both
+  // fields have a `.catch()` and would fall back to empty — indistinguishable
+  // from a discovery run that found nothing.
+  if (!("companyIds" in outputData)) return null;
+
+  const result = StoredDiscoveryOutputSchema.safeParse(outputData);
+  return result.success ? result.data : null;
+}
+
 export async function runDiscoveryEngine(params: DiscoveryParams) {
-  const { workspaceId, agentRunId, customDomains, icpParams } = params;
+  const { workspaceId, agentRunId, customDomains, icpParams, source = "discovery" } = params;
 
   try {
     // Mark the run as actually running. It's created QUEUED by the caller and
@@ -77,16 +144,25 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
     //    growing a second, subtly different scraper. Discovery's own contract is
     //    that one bad domain must never abort a 40-domain run, so both kinds of
     //    failure are swallowed here — see the note on `ingestDomain`.
+    //
+    //    A Set, not an array: two requested domains can extract to the same
+    //    `Company.domain` (`acme.com` and `www.acme.com` both usually do), and the
+    //    upsert then returns one id twice. Counting it twice would overstate what
+    //    the run found.
+    const foundCompanyIds = new Set<string>();
+
     const processDomain = async (domain: string) => {
       try {
         const result = await ingestDomain({
           domain,
           workspaceId,
-          source: "discovery",
+          source,
           agentRunId,
         });
 
-        if (!result.companyId) {
+        if (result.companyId) {
+          foundCompanyIds.add(result.companyId);
+        } else {
           await logActivity(workspaceId, "SCRAPE_FAILED", `Could not analyze ${domain}`, result.reason ?? "Failed to extract meaningful firmographic data.");
         }
       } catch (err: unknown) {
@@ -104,12 +180,25 @@ export async function runDiscoveryEngine(params: DiscoveryParams) {
     }
 
     // 6. Complete Run
+    //
+    // The results list is written in the same update as COMPLETED, on purpose: a
+    // run marked complete without one would look, to the Companies page, exactly
+    // like a run that legitimately found nothing.
+    const output: StoredDiscoveryOutput = {
+      companyIds: [...foundCompanyIds],
+      requestedDomains: domainsToScrape.length,
+    };
+
     await prisma.agentRun.update({
       where: { id: agentRunId },
-      data: { status: "COMPLETED", completedAt: new Date() }
+      data: {
+        status: "COMPLETED",
+        completedAt: new Date(),
+        outputData: output as unknown as Prisma.InputJsonValue,
+      }
     });
-    
-    await logActivity(workspaceId, "RUN_COMPLETE", "Discovery Run Completed", `Successfully finished processing ${domainsToScrape.length} targets.`);
+
+    await logActivity(workspaceId, "RUN_COMPLETE", "Discovery Run Completed", `Read ${domainsToScrape.length} target(s) and added or updated ${foundCompanyIds.size} company record(s).`);
 
   } catch (error: unknown) {
     const reason = error instanceof Error ? error.message : "An unexpected error occurred.";

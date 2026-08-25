@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useTransition, useEffect } from "react";
+import { useState, useTransition, useEffect, useCallback } from "react";
 import { Topbar } from "@/components/layout/Topbar";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge, CompanyStatusBadge } from "@/components/ui/Badge";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { Filter, Search, Globe, Users, ArrowRight, Trash2, Loader2, CheckSquare, ChevronLeft, ChevronRight } from "lucide-react";
+import { Filter, Search, Globe, Users, ArrowRight, Trash2, Loader2, CheckSquare, ChevronLeft, ChevronRight, Target, X } from "lucide-react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { deleteCompany, bulkDeleteCompanies } from "./actions";
 import { useListState } from "@/hooks/useListState";
 import { getScoreColor } from "@/lib/scoring/opportunity-score";
@@ -19,6 +20,87 @@ function ScoreDot({ score }: { score: number | null }) {
   return <span className={`text-[14px] font-semibold ${getScoreColor(score)}`}>{score}</span>;
 }
 
+/**
+ * The three ways "show me only this run's results" can turn out.
+ *
+ * Split rather than collapsed into one nullable shape because each needs a
+ * different sentence, and merging them would mean showing "0 companies" for two
+ * situations that are not that: a run whose results were never recorded, and a
+ * run id that does not belong to this workspace.
+ */
+export type RunFilterView =
+  | {
+      kind: "tracked";
+      id: string;
+      title: string;
+      /** Sites the run set out to read, failures included. */
+      requestedDomains: number;
+    }
+  /** Finished before results were recorded — its companies can't be isolated. */
+  | { kind: "untracked"; id: string; title: string }
+  /** No such run in this workspace. Usually a stale or hand-edited link. */
+  | { kind: "missing"; id: string };
+
+/**
+ * The bar that explains why this list is shorter than the workspace's.
+ *
+ * It always offers a way out, including in the two failure shapes — a filter you
+ * cannot see the reason for and cannot clear is worse than no filter.
+ */
+function RunFilterBanner({ filter, shown }: { filter: RunFilterView; shown: number }) {
+  return (
+    <div className="mb-6 flex items-start gap-3 rounded-xl border border-[#0071E3]/20 bg-[#EBF3FF] px-4 py-3.5">
+      <Target size={16} className="mt-0.5 shrink-0 text-[#0071E3]" />
+
+      <div className="min-w-0 flex-1">
+        {filter.kind === "tracked" && (
+          <>
+            <p className="text-[13px] font-medium text-[#1D1D1F]">
+              Showing {shown} {shown === 1 ? "company" : "companies"} from {filter.title}
+            </p>
+            <p className="mt-0.5 text-[12px] leading-relaxed text-[#4B5563]">
+              {/* Both numbers on purpose. Some sites block scrapers or time out, so
+                  the list is normally shorter than the number of matches found —
+                  without the second number that looks like results went missing. */}
+              {filter.requestedDomains} matching {filter.requestedDomains === 1 ? "website was" : "websites were"} read.
+              {shown < filter.requestedDomains && " The rest could not be read, or have since been deleted."}
+            </p>
+          </>
+        )}
+
+        {filter.kind === "untracked" && (
+          <>
+            <p className="text-[13px] font-medium text-[#1D1D1F]">
+              {filter.title} did not record which companies it found
+            </p>
+            <p className="mt-0.5 text-[12px] leading-relaxed text-[#4B5563]">
+              It ran before results were tracked. Its companies are still in your
+              list — they just can&apos;t be separated out any more.
+            </p>
+          </>
+        )}
+
+        {filter.kind === "missing" && (
+          <>
+            <p className="text-[13px] font-medium text-[#1D1D1F]">That search could not be found</p>
+            <p className="mt-0.5 text-[12px] leading-relaxed text-[#4B5563]">
+              The link may be out of date, or the run may have been deleted.
+            </p>
+          </>
+        )}
+      </div>
+
+      <Link
+        href="/companies"
+        className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-[#0071E3] transition-colors hover:bg-white/70"
+      >
+        <X size={13} />
+        Show all
+      </Link>
+    </div>
+  );
+}
+
 interface CompaniesClientProps {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
   companies: any[];
@@ -26,9 +108,10 @@ interface CompaniesClientProps {
   totalPages: number;
   currentPage: number;
   searchQueryParam: string;
+  runFilter: RunFilterView | null;
 }
 
-export function CompaniesClient({ companies, totalItems, totalPages, currentPage, searchQueryParam }: CompaniesClientProps) {
+export function CompaniesClient({ companies, totalItems, totalPages, currentPage, searchQueryParam, runFilter }: CompaniesClientProps) {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState(searchQueryParam);
   const [isPending, startTransition] = useTransition();
@@ -45,27 +128,52 @@ export function CompaniesClient({ companies, totalItems, totalPages, currentPage
     removeDeletedId,
   } = useListState(companies);
 
+  /**
+   * The one place that builds this page's query string.
+   *
+   * Both callers used to construct a fresh `URLSearchParams` from just the values
+   * they cared about, which silently dropped everything else — so with a run
+   * filter active, typing in the search box or turning the page would have thrown
+   * the filter away and dumped the user back into the full list.
+   *
+   * Keyed on `runId` rather than the `runFilter` object: the object arrives as a
+   * prop from a server render, so its identity changes on every refresh, and
+   * depending on it would restart the debounce timer below on each one.
+   */
+  const runId = runFilter?.id ?? null;
+
+  const buildQuery = useCallback(
+    (overrides: { page?: number }) => {
+      const params = new URLSearchParams();
+      const nextPage = overrides.page ?? 1;
+
+      if (searchQuery) params.set("q", searchQuery);
+      if (nextPage > 1) params.set("page", nextPage.toString());
+      if (runId) params.set("run", runId);
+
+      const qs = params.toString();
+      return qs ? `/companies?${qs}` : "/companies";
+    },
+    [searchQuery, runId]
+  );
+
   // Debounced search pushing to URL
   useEffect(() => {
     const timeout = setTimeout(() => {
       if (searchQuery !== searchQueryParam) {
         startTransition(() => {
-          const params = new URLSearchParams();
-          if (searchQuery) params.set("q", searchQuery);
-          // Reset page to 1 when search changes
-          router.push(`/companies?${params.toString()}`);
+          // Page deliberately omitted, i.e. back to 1: a new search has no reason
+          // to keep the old page number.
+          router.push(buildQuery({}));
         });
       }
     }, 300);
     return () => clearTimeout(timeout);
-  }, [searchQuery, searchQueryParam, router]);
+  }, [searchQuery, searchQueryParam, router, buildQuery]);
 
   const goToPage = (p: number) => {
     startTransition(() => {
-      const params = new URLSearchParams();
-      if (searchQuery) params.set("q", searchQuery);
-      if (p > 1) params.set("page", p.toString());
-      router.push(`/companies?${params.toString()}`);
+      router.push(buildQuery({ page: p }));
     });
   };
 
@@ -98,13 +206,19 @@ export function CompaniesClient({ companies, totalItems, totalPages, currentPage
     <div className="flex h-full flex-col bg-white">
       <Topbar
         title="Companies"
-        subtitle={`${totalItems} companies tracked`}
+        subtitle={
+          // "N companies tracked" would be a lie while a run filter is on — N is
+          // then this search's results, not the workspace's list.
+          runFilter
+            ? `${totalItems} from one search`
+            : `${totalItems} companies tracked`
+        }
         actions={
           <div className="flex items-center gap-3">
             {selectedIds.size > 0 && (
-              <Button 
-                variant="secondary" 
-                size="sm" 
+              <Button
+                variant="secondary"
+                size="sm"
                 icon={isBulkDeleting ? Loader2 : Trash2}
                 onClick={handleBulkDelete}
                 disabled={isBulkDeleting}
@@ -120,6 +234,8 @@ export function CompaniesClient({ companies, totalItems, totalPages, currentPage
 
       <main className="flex-1 overflow-y-auto p-8 bg-[#F5F5F7]">
         <div className="mx-auto max-w-6xl flex flex-col min-h-full">
+          {runFilter && <RunFilterBanner filter={runFilter} shown={totalItems} />}
+
           {/* Search bar */}
           <div className="mb-6 relative">
             <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#86868B]" />
@@ -239,7 +355,17 @@ export function CompaniesClient({ companies, totalItems, totalPages, currentPage
                 }) : (
                   <tr>
                     <td colSpan={9} className="text-center py-12 text-[#86868B]">
-                      No companies found matching &quot;{searchQuery}&quot;
+                      {/* Three different empty lists, and blaming the search box
+                          for all of them sent people looking in the wrong place. */}
+                      {runFilter ? (
+                        searchQuery
+                          ? <>No companies in this search match &quot;{searchQuery}&quot;.</>
+                          : <>This search did not return any companies.</>
+                      ) : searchQuery ? (
+                        <>No companies found matching &quot;{searchQuery}&quot;.</>
+                      ) : (
+                        <>No companies yet. Run a discovery or a lookalike search to fill this in.</>
+                      )}
                     </td>
                   </tr>
                 )}

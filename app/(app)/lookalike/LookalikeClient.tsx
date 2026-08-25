@@ -88,6 +88,19 @@ export function LookalikeClient({
   const [runIdToPoll, setRunIdToPoll] = useState<string | null>(null);
 
   /**
+   * Mirrors `runIdToPoll`, for the same reason `phaseRef` mirrors `phase` below:
+   * `handleSettled` needs the id of the run that just finished, so it can send
+   * the agency to that search's results rather than the whole company list, and
+   * it cannot take a dependency that would resubscribe the poll.
+   */
+  const runIdRef = useRef<string | null>(null);
+
+  const pollRun = (id: string) => {
+    runIdRef.current = id;
+    setRunIdToPoll(id);
+  };
+
+  /**
    * Which kind of run is in flight. Held in a ref as well as in state because
    * `handleSettled` has to stay referentially stable — putting `phase` in its
    * dependency list would resubscribe the poll and reset its clock mid-run.
@@ -120,6 +133,8 @@ export function LookalikeClient({
 
   const handleSettled = useCallback(
     (error: string | null) => {
+      const finishedRunId = runIdRef.current;
+      runIdRef.current = null;
       setRunIdToPoll(null);
 
       if (error) {
@@ -129,10 +144,15 @@ export function LookalikeClient({
       }
 
       if (phaseRef.current === "search") {
-        // Same destination the discovery screen uses. The overlay deliberately
-        // stays up through the navigation — the companies are already saved, and
-        // a flash of this page in between reads as if nothing happened.
-        router.push("/companies");
+        // Straight to that search's own results, not the whole company list. The
+        // point of a lookalike search is judging whether the profile was any
+        // good, and that is impossible to see against three hundred companies
+        // from earlier runs.
+        //
+        // The overlay deliberately stays up through the navigation — the
+        // companies are already saved, and a flash of this page in between reads
+        // as if nothing happened.
+        router.push(finishedRunId ? `/companies?run=${finishedRunId}` : "/companies");
         return;
       }
 
@@ -159,7 +179,7 @@ export function LookalikeClient({
     try {
       const res = await startLookalike({ domains });
       if (res?.runId) {
-        setRunIdToPoll(res.runId);
+        pollRun(res.runId);
       } else {
         // With no run id there is nothing to poll, so the overlay would hang.
         endPhase();
@@ -179,7 +199,7 @@ export function LookalikeClient({
     try {
       const res = await searchForLookalikes(edited);
       if (res?.runId) {
-        setRunIdToPoll(res.runId);
+        pollRun(res.runId);
       } else {
         endPhase();
         setErrorMsg("The search did not start — no run was created. Please try again.");

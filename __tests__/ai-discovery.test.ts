@@ -9,7 +9,7 @@
  * that behaviour down so it cannot come back.
  */
 
-import { runDiscoveryEngine } from "@/lib/ai/discovery";
+import { runDiscoveryEngine, parseStoredDiscoveryOutput } from "@/lib/ai/discovery";
 import { prisma } from "@/lib/db";
 import { logActivity } from "@/lib/activity";
 import { ai } from "@/lib/ai/groq";
@@ -162,6 +162,9 @@ describe("runDiscoveryEngine", () => {
       expect(companyUpsert).not.toHaveBeenCalled();
       expect(signalCreate).not.toHaveBeenCalled();
       expect(terminalRunUpdate()?.status).toBe("FAILED");
+      // And no results list. An empty one would read, to the Companies page, as
+      // a search that ran fine and matched nothing.
+      expect(terminalRunUpdate()?.outputData).toBeUndefined();
     });
 
     it("records a reason on the run, not just in the console", async () => {
@@ -256,6 +259,52 @@ describe("runDiscoveryEngine", () => {
       expect(agentRunUpdate.mock.calls.some(([a]) => a.data?.processedItems?.increment === 1)).toBe(true);
       expect(terminalRunUpdate()?.status).toBe("COMPLETED");
     });
+
+    it("records which companies it found on the finished run", async () => {
+      await runDiscoveryEngine({ ...RUN, icpParams: ICP });
+
+      // The only place this is written down. Nothing else in the schema links a
+      // company back to the run that found it — `Company` has no `agentRunId`,
+      // and `discoverySource` is written once on create — so without this the
+      // Companies page can only ever show the entire workspace.
+      const output = parseStoredDiscoveryOutput(terminalRunUpdate()?.outputData);
+      expect(output).toEqual({
+        companyIds: ["co_Acme Payments"],
+        requestedDomains: 1,
+      });
+    });
+
+    it("labels the company as discovery unless told otherwise", async () => {
+      await runDiscoveryEngine({ ...RUN, icpParams: ICP });
+      expect(companyUpsert.mock.calls[0][0].create.discoverySource).toBe("discovery");
+    });
+
+    it("passes a caller's label through to the company row", async () => {
+      await runDiscoveryEngine({ ...RUN, icpParams: ICP, source: "lookalike" });
+
+      // What makes a company first met through "find companies like these"
+      // distinguishable later. On `create` only — see `IngestDomainParams`.
+      expect(companyUpsert.mock.calls[0][0].create.discoverySource).toBe("lookalike");
+      expect(companyUpsert.mock.calls[0][0].update.discoverySource).toBeUndefined();
+    });
+  });
+
+  it("lists a company once when two requested domains resolve to it", async () => {
+    search.mockResolvedValue(serperPage(["acme.io", "blog.acme.io"]));
+    stubLlm({
+      domains: { domains: ["acme.io", "blog.acme.io"] },
+      extraction: { name: "Acme", domain: "acme.io" },
+    });
+
+    await runDiscoveryEngine({ ...RUN, icpParams: ICP });
+
+    // Both pages extract to the same company, so the upsert hands the same id
+    // back twice. Listing it twice would overstate what the run found, and would
+    // make the Companies page's "shown of read" line disagree with its own table.
+    const output = parseStoredDiscoveryOutput(terminalRunUpdate()?.outputData);
+    expect(output?.companyIds).toEqual(["co_Acme"]);
+    // Still 2: this counts sites the run set out to read, failures included.
+    expect(output?.requestedDomains).toBe(2);
   });
 
   it("writes an invented signal type as PRESS_MENTION instead of failing the insert", async () => {
@@ -419,5 +468,99 @@ describe("runDiscoveryEngine", () => {
     expect(icpFindFirst).toHaveBeenCalledWith({ where: { workspaceId: "ws_1" } });
     const queries = search.mock.calls.map(([q]) => q as string);
     expect(queries.some((q) => q.includes("Logistics") && q.includes("Germany"))).toBe(true);
+  });
+});
+
+/**
+ * The read side of `AgentRun.outputData` for discovery runs.
+ *
+ * This is what stands between a hand-edited `?run=` link and the Companies page,
+ * and it is guarding a `Json?` column — TypeScript sees `any` there, so the
+ * compiler cannot help at all. Everything a caller passes in is untrusted.
+ */
+describe("parseStoredDiscoveryOutput", () => {
+  it("round-trips what the engine writes", () => {
+    const written = { companyIds: ["co_1", "co_2"], requestedDomains: 5 };
+    expect(parseStoredDiscoveryOutput(written)).toEqual(written);
+  });
+
+  it("reads a run that found nothing as a run that found nothing", () => {
+    // Distinct from a run with no record at all, which is the whole reason the
+    // return type is nullable rather than defaulting to an empty list.
+    expect(parseStoredDiscoveryOutput({ companyIds: [], requestedDomains: 3 })).toEqual({
+      companyIds: [],
+      requestedDomains: 3,
+    });
+  });
+
+  it("returns null for a run that recorded nothing", () => {
+    // Every discovery run that finished before this existed. The Companies page
+    // says so out loud instead of showing "0 companies".
+    expect(parseStoredDiscoveryOutput(null)).toBeNull();
+    expect(parseStoredDiscoveryOutput(undefined)).toBeNull();
+  });
+
+  it("returns null for values that are not an object", () => {
+    expect(parseStoredDiscoveryOutput("companyIds")).toBeNull();
+    expect(parseStoredDiscoveryOutput(42)).toBeNull();
+    expect(parseStoredDiscoveryOutput(true)).toBeNull();
+    // An array is `typeof "object"`, and `"companyIds" in []` is false, but the
+    // explicit check means that does not have to be relied on.
+    expect(parseStoredDiscoveryOutput(["co_1"])).toBeNull();
+  });
+
+  it("returns null for another engine's output blob", () => {
+    // The reason for the `"companyIds" in` check. Both fields below have a
+    // `.catch()`, so without it these would parse to `{companyIds: [], ...}` —
+    // an intelligence run would look like a discovery run that found nothing,
+    // and `?run=<that id>` would show an empty Companies table with a confident
+    // explanation attached to it.
+    expect(parseStoredDiscoveryOutput({ rawOutput: "...", scores: { overall: 80 } })).toBeNull();
+    expect(
+      parseStoredDiscoveryOutput({
+        currentCompany: "Acme",
+        currentStep: "Enriching",
+        details: "",
+        lastUpdated: new Date().toISOString(),
+      })
+    ).toBeNull();
+    // A lookalike run's profile blob, for the same reason.
+    expect(parseStoredDiscoveryOutput({ profile: { name: "Mid-market fintech" } })).toBeNull();
+  });
+
+  it("recovers the ids when the rest of the blob is junk", () => {
+    // Half-written or hand-edited. The ids are the load-bearing part; a bad
+    // count only weakens one sentence of explanatory text, so it degrades to 0
+    // rather than throwing away a list of real companies.
+    expect(parseStoredDiscoveryOutput({ companyIds: ["co_1"], requestedDomains: "five" })).toEqual({
+      companyIds: ["co_1"],
+      requestedDomains: 0,
+    });
+    expect(parseStoredDiscoveryOutput({ companyIds: ["co_1"], requestedDomains: -2 })).toEqual({
+      companyIds: ["co_1"],
+      requestedDomains: 0,
+    });
+    expect(parseStoredDiscoveryOutput({ companyIds: ["co_1"] })).toEqual({
+      companyIds: ["co_1"],
+      requestedDomains: 0,
+    });
+  });
+
+  it("drops a company id list that is not a list of ids", () => {
+    // These end up in a Prisma `id: { in: [...] }`, so a number or an object
+    // slipping through would be a query-time crash on a page load rather than
+    // an empty table.
+    expect(parseStoredDiscoveryOutput({ companyIds: "co_1", requestedDomains: 1 })).toEqual({
+      companyIds: [],
+      requestedDomains: 1,
+    });
+    expect(parseStoredDiscoveryOutput({ companyIds: [1, 2], requestedDomains: 2 })).toEqual({
+      companyIds: [],
+      requestedDomains: 2,
+    });
+    expect(parseStoredDiscoveryOutput({ companyIds: null, requestedDomains: 2 })).toEqual({
+      companyIds: [],
+      requestedDomains: 2,
+    });
   });
 });

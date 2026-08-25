@@ -9,6 +9,15 @@ import { redirect } from "next/navigation";
 
 export async function startDiscovery(payload: {
   customDomains?: string;
+  /**
+   * How companies this run adds for the first time should be labelled. Defaults
+   * to a plain discovery run; the lookalike search passes `"lookalike"`.
+   *
+   * Not read from the browser for anything but this label — it never widens what
+   * the run is allowed to do, so an edited value can only mislabel a row in the
+   * caller's own workspace.
+   */
+  source?: string;
   icpParams?: {
     countries: Record<string, string[]>;
     industries: string[];
@@ -69,19 +78,22 @@ export async function startDiscovery(payload: {
       workspaceId,
       type: "DISCOVERY",
       status: "QUEUED",
-      title: "Company Discovery Run",
-      description: customDomains.length > 0 
+      // Named so the Companies page can say which search a filtered list came
+      // from without having to know why the run was started.
+      title: payload.source === "lookalike" ? "Lookalike Search" : "Company Discovery Run",
+      description: customDomains.length > 0
         ? `Manual import of ${customDomains.length} domain(s)`
         : "Public web research based on ICP",
     }
   });
 
-  // Kick off the background process. 
+  // Kick off the background process.
   // We do not await this, so it runs in the background.
   runDiscoveryEngine({
     workspaceId,
     agentRunId: agentRun.id,
     customDomains,
+    source: payload.source,
     icpParams: payload.icpParams
   }).catch(console.error);
 
