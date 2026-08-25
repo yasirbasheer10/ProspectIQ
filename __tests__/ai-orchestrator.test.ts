@@ -288,7 +288,15 @@ describe("orchestrator", () => {
       await startOrchestratorRun("ws_1");
       await drain();
 
-      expect(research).toHaveBeenCalledWith({ companyId: "a", workspaceId: "ws_1" });
+      // `fastModel` is part of the contract, not incidental: this loop runs
+      // research up to MAX_COMPANIES_PER_RUN times in one invocation, so it has
+      // to opt out of the slow, expensive reasoning model even when that model
+      // is switched on for the intelligence a user requests by hand.
+      expect(research).toHaveBeenCalledWith({
+        companyId: "a",
+        workspaceId: "ws_1",
+        fastModel: true,
+      });
     });
   });
 

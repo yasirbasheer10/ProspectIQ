@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import { prisma } from "@/lib/db";
-import { ai, MODEL } from "./groq";
+import { completeJsonObject } from "./kimi";
 import { performSearch } from "./search";
 import { IntelligenceSchema, parseAIResponse } from "./schemas";
 import { STALE_RUN_TIMEOUT_MS } from "./stale-runs";
@@ -16,6 +16,14 @@ type IntelligenceOutput = z.infer<typeof IntelligenceSchema>;
 interface IntelligenceParams {
   companyId: string;
   workspaceId: string;
+  /**
+   * Pins this run to the cheap fast model regardless of how the reasoning model
+   * is configured — see `ThinkingEngine` in `kimi.ts`. Set by the two callers
+   * whose research is a means to an end: the orchestrator's loop over many
+   * companies, and the audit's evidence pass. A single company a user is waiting
+   * on leaves this unset and gets the reasoning model.
+   */
+  fastModel?: boolean;
 }
 
 const intelligenceSchemaDefinition = `
@@ -91,7 +99,7 @@ const intelligenceSchemaDefinition = `
 // ENGINE
 // ─────────────────────────────────────────────────────────────
 
-export async function researchCompany({ companyId, workspaceId }: IntelligenceParams) {
+export async function researchCompany({ companyId, workspaceId, fastModel }: IntelligenceParams) {
   // 0. Ownership and duplicate-run guards, both before an AgentRun row exists.
   //
   //    This used to be `findUnique({ where: { id: companyId } })` further down,
@@ -166,18 +174,22 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
     const prompt = buildPrompt(company, searchContext);
     
     // Retry logic (up to 3 attempts with exponential backoff)
-    let response;
+    let content: string | null = null;
     let retries = 0;
     const maxRetries = 3;
 
     while (retries < maxRetries) {
       try {
-        response = await ai.chat.completions.create({
-          model: MODEL,
-          messages: [{ role: "user", content: prompt }],
-          response_format: { type: "json_object" },
-          temperature: 0.2
-        });
+        // Which model answers is decided in `kimi.ts`. Callers that pass
+        // `fastModel` pin themselves to the fast model; one company a user is
+        // waiting on gets the reasoning model when it is configured. The vendor
+        // wrapper does not retry internally, so three attempts here stay three
+        // calls rather than nine.
+        content = await completeJsonObject(
+          fastModel ? "intelligence-fast" : "intelligence",
+          prompt,
+          0.2
+        );
         break; // Success
       } catch (err) {
         retries++;
@@ -187,13 +199,13 @@ export async function researchCompany({ companyId, workspaceId }: IntelligencePa
       }
     }
 
-    if (!response?.choices[0].message.content) throw new Error("AI returned no output");
+    if (!content) throw new Error("AI returned no output");
 
     // Validate before writing anything. The engine writes evidence, signals, an
     // opportunity and contacts in sequence, so an unchecked field that only
     // fails at step 6 leaves half a research run committed to the database.
     const data = parseAIResponse(
-      response.choices[0].message.content,
+      content,
       IntelligenceSchema,
       `Research of ${company.name} failed`
     );

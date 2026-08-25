@@ -44,3 +44,8 @@ next-env.d.ts
 
 # lint cache — makes `npm run verify` ~20s faster on repeat runs
 .eslintcache
+
+# throwaway diagnostics run by hand against a third-party endpoint. Ignored
+# because scripts/save.ps1 does `git add -A`, which would otherwise sweep one
+# into main and deploy it.
+scripts/*-probe.mjs

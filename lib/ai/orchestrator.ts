@@ -237,7 +237,12 @@ async function orchestratorLoop(runId: string, workspaceId: string) {
           // Execute Tool
           if (action === "RESEARCH") {
             if (company.opportunities.length === 0) {
-              await researchCompany({ companyId: company.id, workspaceId });
+              // `fastModel` keeps this on the cheap fast model. This loop runs
+              // research up to MAX_COMPANIES_PER_RUN times inside one
+              // invocation, so the slower, far more expensive reasoning model
+              // would break the same timeout the caps at the top of this file
+              // exist to respect.
+              await researchCompany({ companyId: company.id, workspaceId, fastModel: true });
               // Re-read so the next iteration sees the contacts and opportunity
               // that research just created. FIND_BUYER used to exist purely to
               // do this re-read and claim credit for it as a pipeline step.

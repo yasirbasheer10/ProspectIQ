@@ -42,7 +42,7 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logActivity } from "@/lib/activity";
-import { ai, MODEL } from "./groq";
+import { completeJsonObject } from "./kimi";
 import {
   GrowthAuditSchema,
   parseAIResponse,
@@ -316,7 +316,12 @@ export async function runGrowthAuditEngine(params: RunGrowthAuditParams): Promis
 
     if (existingEvidence === 0) {
       try {
-        await researchCompany({ companyId, workspaceId });
+        // `fastModel` on purpose. This pass extracts signals and quotes out of
+        // search snippets, which the fast model is good at, and the audit's own
+        // writing below is where the reasoning model earns its cost. Running
+        // both on the slow model would roughly double an audit that is already
+        // fired unawaited from the server action.
+        await researchCompany({ companyId, workspaceId, fastModel: true });
       } catch (err) {
         console.warn(`Growth audit: research failed for ${domain}, continuing without it:`, err);
         await logActivity(
@@ -740,6 +745,11 @@ ${auditSchemaDefinition}
  * `searchForTargetsWithAI`. Temperature is a little above those two because an
  * audit is prose a human reads rather than fields to fill, and 0.2 makes every
  * audit sound like the same template.
+ *
+ * Which model answers is decided in `kimi.ts`: the reasoning model when it is
+ * configured, Groq otherwise. The retry loop belongs here either way — the
+ * vendor wrapper deliberately does not retry, so three attempts stay three
+ * attempts instead of nine.
  */
 async function callModelWithRetries(prompt: string, label: string): Promise<string> {
   const maxRetries = 3;
@@ -747,14 +757,7 @@ async function callModelWithRetries(prompt: string, label: string): Promise<stri
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const response = await ai.chat.completions.create({
-        model: MODEL,
-        messages: [{ role: "user", content: prompt }],
-        response_format: { type: "json_object" },
-        temperature: 0.4,
-      });
-
-      const content = response.choices[0]?.message?.content;
+      const content = await completeJsonObject("audit", prompt, 0.4);
       if (content) return content;
 
       lastError = new Error("the model returned an empty response");
