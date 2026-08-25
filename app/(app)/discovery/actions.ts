@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/db";
 import { requireWorkspaceId } from "@/lib/session";
-import { runDiscoveryEngine } from "@/lib/ai/discovery";
+import { runDiscoveryEngine, RUN_TITLES } from "@/lib/ai/discovery";
 import { sweepStaleRuns } from "@/lib/ai/stale-runs";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { redirect } from "next/navigation";
@@ -79,8 +79,10 @@ export async function startDiscovery(payload: {
       type: "DISCOVERY",
       status: "QUEUED",
       // Named so the Companies page can say which search a filtered list came
-      // from without having to know why the run was started.
-      title: payload.source === "lookalike" ? "Lookalike Search" : "Company Discovery Run",
+      // from, and can sort lookalike searches apart from plain discovery, without
+      // having to know why the run was started. Both strings live in `RUN_TITLES`
+      // because the reader compares against them.
+      title: payload.source === "lookalike" ? RUN_TITLES.lookalike : RUN_TITLES.discovery,
       description: customDomains.length > 0
         ? `Manual import of ${customDomains.length} domain(s)`
         : "Public web research based on ICP",

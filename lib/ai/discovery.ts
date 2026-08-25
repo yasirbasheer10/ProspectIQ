@@ -86,6 +86,34 @@ export function parseStoredDiscoveryOutput(outputData: unknown): StoredDiscovery
   return result.success ? result.data : null;
 }
 
+/**
+ * The two names a discovery run can be given, and the only place they are spelled.
+ *
+ * A lookalike search *is* a discovery run — `startDiscovery` creates it, the same
+ * engine executes it, and only this label differs. That means the label is the one
+ * thing separating "companies like my best customers" from "companies matching my
+ * ICP" on the Companies page, so it cannot be typed out in two files: rename it in
+ * one and the other silently stops recognising every run ever made.
+ */
+export const RUN_TITLES = {
+  lookalike: "Lookalike Search",
+  discovery: "Company Discovery Run",
+} as const;
+
+export type RunKind = keyof typeof RUN_TITLES;
+
+/**
+ * Which kind of search a stored run was.
+ *
+ * Everything that is not exactly the lookalike label counts as discovery,
+ * including the older runs made before either label existed (their titles were
+ * written by hand) — those were all plain discovery, so the fallback is correct
+ * rather than merely safe.
+ */
+export function runKindFromTitle(title: string): RunKind {
+  return title === RUN_TITLES.lookalike ? "lookalike" : "discovery";
+}
+
 export async function runDiscoveryEngine(params: DiscoveryParams) {
   const { workspaceId, agentRunId, customDomains, icpParams, source = "discovery" } = params;
 

@@ -9,7 +9,12 @@
  * that behaviour down so it cannot come back.
  */
 
-import { runDiscoveryEngine, parseStoredDiscoveryOutput } from "@/lib/ai/discovery";
+import {
+  runDiscoveryEngine,
+  parseStoredDiscoveryOutput,
+  runKindFromTitle,
+  RUN_TITLES,
+} from "@/lib/ai/discovery";
 import { prisma } from "@/lib/db";
 import { logActivity } from "@/lib/activity";
 import { ai } from "@/lib/ai/groq";
@@ -561,6 +566,34 @@ describe("parseStoredDiscoveryOutput", () => {
     expect(parseStoredDiscoveryOutput({ companyIds: null, requestedDomains: 2 })).toEqual({
       companyIds: [],
       requestedDomains: 2,
+    });
+  });
+});
+
+describe("runKindFromTitle", () => {
+  it("recognises a lookalike search by the title it was given", () => {
+    // Not a loose match on purpose. "Lookalike Search Failed" is a real activity
+    // log string, and a `startsWith`/`includes` test would eventually classify
+    // something that only mentions the feature.
+    expect(runKindFromTitle(RUN_TITLES.lookalike)).toBe("lookalike");
+    expect(runKindFromTitle("Lookalike Search Failed")).toBe("discovery");
+    expect(runKindFromTitle("lookalike search")).toBe("discovery");
+  });
+
+  it("treats everything else, including old hand-written titles, as discovery", () => {
+    // Runs made before either label existed carried titles like these, and they
+    // were all plain discovery — so this fallback is right, not just safe.
+    expect(runKindFromTitle(RUN_TITLES.discovery)).toBe("discovery");
+    expect(runKindFromTitle("Discovery Run")).toBe("discovery");
+    expect(runKindFromTitle("")).toBe("discovery");
+  });
+
+  it("agrees with the title startDiscovery actually writes", () => {
+    // The whole point of the shared constant: rename one of these and this test
+    // is the thing that notices the reader stopped recognising the writer.
+    expect(RUN_TITLES).toEqual({
+      lookalike: "Lookalike Search",
+      discovery: "Company Discovery Run",
     });
   });
 });

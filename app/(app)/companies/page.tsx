@@ -1,7 +1,13 @@
 import { prisma } from "@/lib/db";
 import { requireWorkspaceId } from "@/lib/session";
-import { parseStoredDiscoveryOutput } from "@/lib/ai/discovery";
-import { CompaniesClient, type RunFilterView } from "./CompaniesClient";
+import { formatDistanceToNow } from "date-fns";
+import { parseStoredDiscoveryOutput, runKindFromTitle } from "@/lib/ai/discovery";
+import { CompaniesClient, type RunFilterView, type RunOption } from "./CompaniesClient";
+
+/** How many recent runs to read before filtering out the ones with no results. */
+const RUN_SCAN_DEPTH = 25;
+/** How many end up in the picker. Enough to reach back a few weeks of searching. */
+const RUN_OPTIONS_SHOWN = 8;
 
 export default async function CompaniesPage({
   searchParams,
@@ -80,7 +86,17 @@ export default async function CompaniesPage({
     }
   }
 
-  const [companies, totalItems] = await Promise.all([
+  // ── The searches you can go back to ───────────────────────────────────────
+  //
+  // Without this the filter above was a one-way door: it could only be switched
+  // on by the redirect at the end of a lookalike search, and clearing it lost the
+  // way back for good. Now the same control that clears it also puts it back.
+  //
+  // Read on every load of this page rather than passed along from the search,
+  // because the point is to reach a search you ran days ago, from a page you
+  // arrived at from the sidebar. In the same `Promise.all` as the list itself so
+  // it costs no extra round trip — it shares nothing with the other two queries.
+  const [companies, totalItems, recentRuns] = await Promise.all([
     prisma.company.findMany({
       where: whereClause,
       include: {
@@ -98,9 +114,45 @@ export default async function CompaniesPage({
       take: pageSize,
     }),
     prisma.company.count({ where: whereClause }),
+    prisma.agentRun.findMany({
+      // Lookalike searches are DISCOVERY runs too — `startDiscovery` creates them,
+      // and only the title differs. That is deliberate: both fill the same list,
+      // so both belong in this picker.
+      where: { workspaceId, type: "DISCOVERY", status: "COMPLETED" },
+      orderBy: { createdAt: "desc" },
+      take: RUN_SCAN_DEPTH,
+      select: { id: true, title: true, createdAt: true, outputData: true },
+    }),
   ]);
 
   const totalPages = Math.ceil(totalItems / pageSize);
+
+  // Filtered in JS, not in the query. Two reasons: `outputData` is `Json?`, where
+  // a `not: null` filter needs `Prisma.DbNull` and silently misbehaves with a
+  // plain null; and "recorded results" is a shape question the parser already
+  // answers, so asking Postgres to guess at it would be a second, weaker copy of
+  // the same rule.
+  const runOptions: RunOption[] = recentRuns
+    .map((run) => {
+      const output = parseStoredDiscoveryOutput(run.outputData);
+      if (!output || output.companyIds.length === 0) return null;
+      return {
+        id: run.id,
+        title: run.title,
+        // Classified here so the client never has to know the label strings, and
+        // so the two groups in the menu cannot disagree with what created the run.
+        kind: runKindFromTitle(run.title),
+        // Formatted here, on the server. `formatDistanceToNow` reads the clock,
+        // which in a component body trips `react-hooks/purity` and would also
+        // hydrate to a different string than it rendered.
+        when: formatDistanceToNow(run.createdAt, { addSuffix: true }),
+        count: output.companyIds.length,
+      };
+    })
+    // Runs that found nothing are left out on purpose: selecting one shows an
+    // empty table, which is a dead end dressed up as an option.
+    .filter((option): option is RunOption => option !== null)
+    .slice(0, RUN_OPTIONS_SHOWN);
 
   return (
     <CompaniesClient
@@ -110,6 +162,7 @@ export default async function CompaniesPage({
       currentPage={page}
       searchQueryParam={q}
       runFilter={runFilter}
+      runOptions={runOptions}
     />
   );
 }

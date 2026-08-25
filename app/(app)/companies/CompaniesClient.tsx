@@ -1,17 +1,20 @@
 "use client";
 
-import { useState, useTransition, useEffect, useCallback } from "react";
+import { useState, useTransition, useEffect, useCallback, useRef } from "react";
 import { Topbar } from "@/components/layout/Topbar";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge, CompanyStatusBadge } from "@/components/ui/Badge";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { Filter, Search, Globe, Users, ArrowRight, Trash2, Loader2, CheckSquare, ChevronLeft, ChevronRight, Target, X } from "lucide-react";
+import { Filter, Search, Globe, Users, ArrowRight, Trash2, Loader2, ChevronLeft, ChevronRight, ChevronDown, Check, Target, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { deleteCompany, bulkDeleteCompanies } from "./actions";
 import { useListState } from "@/hooks/useListState";
 import { getScoreColor } from "@/lib/scoring/opportunity-score";
+// Type-only, and it has to stay that way: `lib/ai/discovery` pulls in Prisma and
+// Groq, which cannot be bundled into a client component. `import type` is erased
+// before bundling, so nothing from that module reaches the browser.
+import type { RunKind } from "@/lib/ai/discovery";
 
 function ScoreDot({ score }: { score: number | null }) {
   if (score === null) return <span className="text-[#86868B] text-[13px]">—</span>;
@@ -47,7 +50,16 @@ export type RunFilterView =
  * It always offers a way out, including in the two failure shapes — a filter you
  * cannot see the reason for and cannot clear is worse than no filter.
  */
-function RunFilterBanner({ filter, shown }: { filter: RunFilterView; shown: number }) {
+function RunFilterBanner({
+  filter,
+  shown,
+  allHref,
+}: {
+  filter: RunFilterView;
+  shown: number;
+  /** Where "Show all" goes. Built by the parent so it keeps the search text. */
+  allHref: string;
+}) {
   return (
     <div className="mb-6 flex items-start gap-3 rounded-xl border border-[#0071E3]/20 bg-[#EBF3FF] px-4 py-3.5">
       <Target size={16} className="mt-0.5 shrink-0 text-[#0071E3]" />
@@ -91,12 +103,179 @@ function RunFilterBanner({ filter, shown }: { filter: RunFilterView; shown: numb
       </div>
 
       <Link
-        href="/companies"
+        href={allHref}
         className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12px] font-medium text-[#0071E3] transition-colors hover:bg-white/70"
       >
         <X size={13} />
         Show all
       </Link>
+    </div>
+  );
+}
+
+/** One selectable past search. Everything here is prepared on the server. */
+export interface RunOption {
+  id: string;
+  /** The run's own name, e.g. "Lookalike Search". */
+  title: string;
+  /** Which group it belongs to. Derived on the server from the title. */
+  kind: RunKind;
+  /** Already-formatted relative time, e.g. "2 hours ago". */
+  when: string;
+  /** How many companies it recorded. Never zero — those aren't offered. */
+  count: number;
+}
+
+/** The two groups, in menu order, with the heading each one gets. */
+const RUN_GROUPS: { kind: RunKind; heading: string }[] = [
+  { kind: "lookalike", heading: "Lookalike searches" },
+  { kind: "discovery", heading: "Discovery runs" },
+];
+
+/**
+ * The Filter button, and what it opens.
+ *
+ * Two problems in one control. The button in this corner existed from the first
+ * draft of the page and did nothing at all when clicked. And the run filter it now
+ * drives used to be reachable *only* from the redirect at the end of a lookalike
+ * search — so clearing it was a one-way door, and there was no way to switch back
+ * and forth between what a lookalike search found and what plain discovery found
+ * without spending another search. This is both the way back and the way across.
+ *
+ * Grouped by kind rather than listed by date because that switch is the thing being
+ * asked for: the headings are what make "show me the lookalike results" a glance
+ * rather than a hunt through timestamps.
+ *
+ * Deliberately links rather than a `<select>`: each option carries three pieces of
+ * information (which search, when, how many it found), and one line of `<option>`
+ * text cannot hold them without turning into a slug.
+ */
+function SearchFilter({
+  options,
+  currentRunId,
+  currentLabel,
+  hrefFor,
+}: {
+  options: RunOption[];
+  currentRunId: string | null;
+  /**
+   * What the active filter is called, when there is one and it has a name. Taken
+   * from the filter itself rather than looked up in `options`, so the button is
+   * still labelled correctly for a search too old to appear in the list.
+   */
+  currentLabel: string | null;
+  hrefFor: (runId: string | null) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  // Both listeners are attached only while the menu is open, and both call
+  // `setOpen` from inside a browser callback rather than from the effect body —
+  // the pattern `react-hooks/set-state-in-effect` allows, and the reason the
+  // polling hooks are written the way they are.
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={boxRef}>
+      <Button
+        variant="secondary"
+        size="sm"
+        icon={Filter}
+        iconRight={ChevronDown}
+        onClick={() => setOpen((isOpen) => !isOpen)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className={currentRunId ? "border-[#0071E3]/30 bg-[#EBF3FF] text-[#0071E3]" : undefined}
+      >
+        {/* The label says what is actually being shown, so an active filter is
+            visible from the topbar and not only from the banner further down. */}
+        {currentLabel ?? (currentRunId ? "One search" : "Filter")}
+      </Button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 z-20 mt-2 w-72 overflow-hidden rounded-xl border border-[#E5E5EA] bg-white py-1 shadow-apple-lg"
+        >
+          <Link
+            href={hrefFor(null)}
+            role="menuitem"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 px-3 py-2 text-[13px] text-[#1D1D1F] transition-colors hover:bg-[#F5F5F7]"
+          >
+            <span className="flex w-4 shrink-0 justify-center">
+              {!currentRunId && <Check size={13} className="text-[#0071E3]" />}
+            </span>
+            All companies
+          </Link>
+
+          {/* Kept visible with nothing to offer, rather than hiding the button: a
+              control that vanishes is harder to understand than one that says why
+              it is empty. */}
+          {options.length === 0 && (
+            <p className="px-3 py-2 text-[12px] leading-relaxed text-[#86868B]">
+              No finished searches to filter by yet. Run a discovery or a lookalike
+              search and it will show up here.
+            </p>
+          )}
+
+          {RUN_GROUPS.map(({ kind, heading }) => {
+            const group = options.filter((option) => option.kind === kind);
+            // An agency that has never run a lookalike search should not be shown an
+            // empty heading implying it has.
+            if (group.length === 0) return null;
+
+            return (
+              <div key={kind} className="mt-1 border-t border-[#F0F0F2] pt-1">
+                <p className="px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-[#86868B]">
+                  {heading}
+                </p>
+
+                {group.map((option) => (
+                  <Link
+                    key={option.id}
+                    href={hrefFor(option.id)}
+                    role="menuitem"
+                    onClick={() => setOpen(false)}
+                    className="flex items-start gap-2 px-3 py-2 transition-colors hover:bg-[#F5F5F7]"
+                  >
+                    <span className="flex w-4 shrink-0 justify-center pt-0.5">
+                      {option.id === currentRunId && <Check size={13} className="text-[#0071E3]" />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline justify-between gap-2">
+                        <span className="truncate text-[13px] font-medium text-[#1D1D1F]">
+                          {option.title}
+                        </span>
+                        {/* The count is what tells two same-named runs apart at a
+                            glance, along with the time below. */}
+                        <span className="shrink-0 text-[12px] text-[#86868B]">{option.count}</span>
+                      </span>
+                      <span className="block text-[12px] text-[#86868B]">{option.when}</span>
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -109,9 +288,10 @@ interface CompaniesClientProps {
   currentPage: number;
   searchQueryParam: string;
   runFilter: RunFilterView | null;
+  runOptions: RunOption[];
 }
 
-export function CompaniesClient({ companies, totalItems, totalPages, currentPage, searchQueryParam, runFilter }: CompaniesClientProps) {
+export function CompaniesClient({ companies, totalItems, totalPages, currentPage, searchQueryParam, runFilter, runOptions }: CompaniesClientProps) {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState(searchQueryParam);
   const [isPending, startTransition] = useTransition();
@@ -143,13 +323,18 @@ export function CompaniesClient({ companies, totalItems, totalPages, currentPage
   const runId = runFilter?.id ?? null;
 
   const buildQuery = useCallback(
-    (overrides: { page?: number }) => {
+    (overrides: { page?: number; runId?: string | null }) => {
       const params = new URLSearchParams();
       const nextPage = overrides.page ?? 1;
+      // `"runId" in overrides` rather than `?? runId`: null has to mean "clear the
+      // filter" and absent has to mean "leave it alone", and `??` cannot tell
+      // those apart — the picker's "All companies" link would silently keep the
+      // filter it was trying to remove.
+      const nextRunId = "runId" in overrides ? overrides.runId : runId;
 
       if (searchQuery) params.set("q", searchQuery);
       if (nextPage > 1) params.set("page", nextPage.toString());
-      if (runId) params.set("run", runId);
+      if (nextRunId) params.set("run", nextRunId);
 
       const qs = params.toString();
       return qs ? `/companies?${qs}` : "/companies";
@@ -227,14 +412,29 @@ export function CompaniesClient({ companies, totalItems, totalPages, currentPage
                 {isBulkDeleting ? "Deleting..." : `Delete ${selectedIds.size} Selected`}
               </Button>
             )}
-            <Button variant="secondary" size="sm" icon={Filter}>Filter</Button>
+            <SearchFilter
+              options={runOptions}
+              currentRunId={runId}
+              // "missing" is the only shape with no title to show — by definition
+              // no run was found to take one from.
+              currentLabel={runFilter && runFilter.kind !== "missing" ? runFilter.title : null}
+              hrefFor={(id) => buildQuery({ runId: id })}
+            />
           </div>
         }
       />
 
       <main className="flex-1 overflow-y-auto p-8 bg-[#F5F5F7]">
         <div className="mx-auto max-w-6xl flex flex-col min-h-full">
-          {runFilter && <RunFilterBanner filter={runFilter} shown={totalItems} />}
+          {runFilter && (
+            <RunFilterBanner
+              filter={runFilter}
+              shown={totalItems}
+              // Keeps whatever is typed in the search box. Clearing the run filter
+              // is not a request to also throw away the text search.
+              allHref={buildQuery({ runId: null })}
+            />
+          )}
 
           {/* Search bar */}
           <div className="mb-6 relative">
