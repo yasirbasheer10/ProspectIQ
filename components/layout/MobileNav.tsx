@@ -4,13 +4,14 @@ import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Menu, X, LayoutDashboard, Telescope, Building2, Lightbulb, FileSearch, Users, Send, GitBranch, MessageSquare, BarChart3, Bot } from "lucide-react";
+import { Menu, X, LayoutDashboard, Telescope, Building2, Lightbulb, FileSearch, Users, Send, GitBranch, MessageSquare, BarChart3, Bot, Target } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { label: "Command Center", href: "/dashboard", icon: LayoutDashboard },
   { label: "Agent Fleet", href: "/agents", icon: GitBranch },
   { label: "Discover", href: "/discovery", icon: Telescope },
+  { label: "Lookalike Search", href: "/lookalike", icon: Target },
   { label: "Companies", href: "/companies", icon: Building2 },
   { label: "Opportunities", href: "/opportunities", icon: Lightbulb },
   { label: "Growth Audits", href: "/audits", icon: FileSearch },

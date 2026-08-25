@@ -1,0 +1,52 @@
+-- ProspectIQ schema change — 2026-08-25 — Lookalike Search
+--
+-- Run this in the Supabase SQL Editor. It is the hand-written equivalent of the
+-- migration Prisma would generate for the Lookalike Search work, and exists
+-- because a direct Prisma connection to this database is not always available.
+--
+-- This is the smallest schema change in the project so far: one new value on an
+-- existing enum. There is no new table and no new column, because `agent_runs`
+-- already has the two JSON columns this feature needs — `inputParams` holds the
+-- customer domains the agency pasted, and `outputData` holds the profile that
+-- was computed from them. A dedicated table would have stored the same two
+-- things behind a migration that could actually go wrong.
+--
+-- Covers one change to prisma/schema.prisma:
+--   1. AgentRunType + LOOKALIKE enum value
+--
+-- Safe to run more than once: the statement is a no-op if already applied.
+-- Purely additive — nothing is dropped, no column changes type or nullability,
+-- and no existing row is read or modified. There is no accompanying rollback
+-- script: Postgres cannot remove a value from an enum, and nothing needs it to.
+
+
+-- ─────────────────────────────────────────────────────────────
+-- 1. The new agent run type.
+-- ─────────────────────────────────────────────────────────────
+-- A lookalike run is not a discovery run and must not be counted as one. The two
+-- are adjacent — a lookalike run ends by handing its profile to the discovery
+-- engine — but they consume different quota and fail for different reasons, and
+-- a workspace asking "how many discovery runs did we do" should get an answer
+-- that means something.
+--
+-- Deliberately NOT wrapped in a DO block: ALTER TYPE ... ADD VALUE is not
+-- permitted inside a function body or subtransaction, so the IF NOT EXISTS form
+-- has to be a plain top-level statement.
+--
+-- Nothing else in this file uses 'LOOKALIKE', which matters: Postgres forbids
+-- using a new enum value in the same transaction that added it. This file is one
+-- statement, so that cannot arise here — but keep it in mind if you ever append
+-- to it.
+ALTER TYPE "AgentRunType" ADD VALUE IF NOT EXISTS 'LOOKALIKE';
+
+
+-- ─────────────────────────────────────────────────────────────
+-- Verify (optional).
+-- ─────────────────────────────────────────────────────────────
+-- Expect a single row back reading LOOKALIKE.
+--
+--   SELECT e.enumlabel
+--     FROM pg_enum e
+--     JOIN pg_type t ON t.oid = e.enumtypid
+--    WHERE t.typname = 'AgentRunType'
+--      AND e.enumlabel = 'LOOKALIKE';

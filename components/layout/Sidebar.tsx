@@ -18,6 +18,7 @@ import {
   Settings,
   HelpCircle,
   Plus,
+  Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +32,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Command Center", href: "/dashboard", icon: LayoutDashboard },
   { label: "Agent Fleet", href: "/agents", icon: GitBranch },
   { label: "Discover", href: "/discovery", icon: Telescope },
+  { label: "Lookalike Search", href: "/lookalike", icon: Target },
   { label: "Companies", href: "/companies", icon: Building2 },
   { label: "Opportunities", href: "/opportunities", icon: Lightbulb },
   { label: "Growth Audits", href: "/audits", icon: FileSearch },

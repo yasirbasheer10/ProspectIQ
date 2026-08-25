@@ -109,6 +109,7 @@ enum AgentRunType {
   DRAFT_OUTREACH
   ORCHESTRATOR
   GROWTH_AUDIT
+  LOOKALIKE
 }
 
 enum SignalType {

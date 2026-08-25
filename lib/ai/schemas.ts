@@ -301,6 +301,48 @@ export const GrowthAuditSchema = z.object({
 });
 
 // ─────────────────────────────────────────────────────────────
+// LOOKALIKE
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * `describeLookalikeProfile` — the *narrative* half of a lookalike profile.
+ *
+ * Read what is missing from this schema, because that is the design: no
+ * industries, no employee range, no technology list, no geography. Every
+ * firmographic fact in a lookalike profile is computed in code from the real
+ * `Company` rows the agency's own customers produced — see
+ * `computeSharedProfile` in `lib/ai/lookalike.ts`. The model is handed those
+ * facts and asked only to do the part arithmetic cannot: name the pattern,
+ * describe it in a sentence a human would recognise, and propose the search
+ * language that would find more of them.
+ *
+ * The reason is specific rather than stylistic. An agency pastes three customers
+ * it already has and asks "find more like these" — the entire value is that the
+ * answer is derived from those three. A model asked to produce the whole profile
+ * will confidently return a plausible ICP that is really a summary of B2B SaaS in
+ * general, and nothing downstream could tell the difference. Restricting it to
+ * the narrative makes that class of failure impossible instead of unlikely.
+ *
+ * `keywords` is the one field with real leverage: `searchForTargetsWithAI` builds
+ * three query angles per keyword, so these become the actual web searches. The
+ * caller trims and caps them for that reason.
+ */
+export const LookalikeNarrativeSchema = z.object({
+  /** A short label an agency would recognise, e.g. "Mid-market DTC skincare brands". */
+  name: z.string().min(1),
+  /** One paragraph on what these companies have in common. */
+  description: z.string().min(1),
+  /**
+   * Short search phrases that would surface similar companies. Not required —
+   * a profile with no keywords still searches on industry, size and region, and
+   * an empty list beats an invented one.
+   */
+  keywords: arrayOf(z.string()),
+  /** 3-5 plain observations shown back to the agency so it can judge the profile. */
+  sharedTraits: arrayOf(z.string()),
+});
+
+// ─────────────────────────────────────────────────────────────
 // PARSER
 // ─────────────────────────────────────────────────────────────
 
