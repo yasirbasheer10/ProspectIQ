@@ -990,3 +990,170 @@ a{color:inherit;text-decoration:none}
     opacity:.045 !important;
   }
 }
+
+/* ─── Cloud Hero ──────────────────────────────────────────────────── */
+.cloud-hero-wrap{
+  position:relative;
+  overflow:hidden;
+  /* tall enough to show sky + dashboard mockup */
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+}
+
+/* Full-bleed canvas, rendered behind everything */
+.cloud-canvas{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  display:block;
+  pointer-events:none;
+  z-index:0;
+}
+
+/* Lift the hero section above the canvas */
+.cloud-hero-inner{
+  position:relative;
+  z-index:10;
+  padding-top:80px;
+  padding-bottom:72px;
+}
+
+/* Hero heading — white on sky */
+.cloud-h1{
+  color:#fff !important;
+  text-shadow:0 2px 20px rgba(15,30,70,.25);
+}
+.cloud-h1 em{
+  color:rgba(255,255,255,.85) !important;
+  font-style:italic;
+}
+
+/* Eyebrow pill — frosted glass */
+.cloud-eyebrow{
+  background:rgba(255,255,255,.18) !important;
+  border:1px solid rgba(255,255,255,.35) !important;
+  color:#fff !important;
+  backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);
+}
+.cloud-eyebrow .dot{
+  background:#fff !important;
+  box-shadow:0 0 0 4px rgba(255,255,255,.25) !important;
+}
+
+/* Body text */
+.cloud-hero-text{
+  color:rgba(255,255,255,.90) !important;
+  text-shadow:0 1px 6px rgba(15,30,70,.20);
+}
+
+/* Primary CTA — white pill (matches cloud-shader demo) */
+.cloud-btn-primary{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  background:#fff;
+  color:#1a5fa8 !important;
+  font-size:15px;
+  font-weight:600;
+  padding:13px 28px;
+  border-radius:100px;
+  box-shadow:0 8px 30px rgba(15,30,70,.20);
+  transition:transform .2s ease, background .2s ease, box-shadow .2s ease;
+  text-decoration:none;
+}
+.cloud-btn-primary:hover{
+  background:rgba(255,255,255,.92);
+  transform:translateY(-2px);
+  box-shadow:0 12px 40px rgba(15,30,70,.28);
+}
+.cloud-btn-primary span{font-size:16px}
+
+/* Ghost CTA — frosted glass */
+.cloud-btn-ghost{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  border:1px solid rgba(255,255,255,.45);
+  background:rgba(255,255,255,.12);
+  color:#fff !important;
+  font-size:15px;
+  font-weight:600;
+  padding:13px 28px;
+  border-radius:100px;
+  backdrop-filter:blur(10px);
+  -webkit-backdrop-filter:blur(10px);
+  transition:background .2s ease, border-color .2s ease;
+  text-decoration:none;
+}
+.cloud-btn-ghost:hover{
+  background:rgba(255,255,255,.22);
+  border-color:rgba(255,255,255,.65);
+}
+
+/* Hero meta badges */
+.cloud-hero-meta{
+  color:rgba(255,255,255,.75) !important;
+}
+.cloud-hero-meta .mini-dot{
+  background:rgba(255,255,255,.8) !important;
+}
+
+/* Browser frame — glass card effect */
+.cloud-browser-frame{
+  background:rgba(255,255,255,.20) !important;
+  border:1px solid rgba(255,255,255,.35) !important;
+  backdrop-filter:blur(16px);
+  -webkit-backdrop-filter:blur(16px);
+  box-shadow:0 30px 80px rgba(15,30,70,.30) !important;
+  padding:6px !important;
+}
+.cloud-browser-frame .browser-top{
+  background:rgba(255,255,255,.15) !important;
+  border-bottom:1px solid rgba(255,255,255,.20) !important;
+}
+.cloud-browser-frame .browser-title{color:rgba(255,255,255,.85) !important}
+.cloud-browser-frame .browser-actions{color:rgba(255,255,255,.60) !important}
+.cloud-browser-frame img{
+  border-radius:14px !important;
+  border:1px solid rgba(0,0,0,.06);
+}
+
+/* Nav: make it transparent on top of the cloud sky */
+.nav{
+  background:transparent !important;
+  border-bottom-color:transparent !important;
+  backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important;
+}
+/* Once user scrolls, restore the solid nav background */
+.nav.scrolled{
+  background:rgba(244,246,251,.97) !important;
+  border-bottom-color:rgba(217,222,234,.75) !important;
+  backdrop-filter:blur(18px) !important;
+  -webkit-backdrop-filter:blur(18px) !important;
+}
+/* Nav links white on cloud sky */
+.nav:not(.scrolled) .nav-links a,
+.nav:not(.scrolled) .nav-signin{
+  color:rgba(255,255,255,.90);
+}
+.nav:not(.scrolled) .nav-links a:hover,
+.nav:not(.scrolled) .nav-signin:hover{
+  color:#fff;
+}
+/* "Get started" button in nav — white pill on sky */
+.nav:not(.scrolled) .btn.btn-small{
+  background:#fff !important;
+  color:#1a5fa8 !important;
+  border-color:#fff !important;
+}
+.nav:not(.scrolled) .btn.btn-small:hover{
+  background:rgba(255,255,255,.90) !important;
+}
+
+@media(max-width:720px){
+  .cloud-hero-inner{padding-top:48px;padding-bottom:48px}
+}
