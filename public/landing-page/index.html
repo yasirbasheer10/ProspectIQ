@@ -12,26 +12,26 @@
 </head>
 <body>
   <div class="page-shell">
-    <header class="nav" id="nav">
-      <a class="brand brand-image" href="#top" aria-label="ProspectIQ home">
-        <img src="assets/prospectiq-logo.png" alt="ProspectIQ — B2B lead intelligence" />
-      </a>
-      <nav class="nav-links" aria-label="Primary navigation">
-        <a href="#product">Product</a>
-        <a href="#workflow">How it works</a>
-        <a href="#intelligence">Intelligence</a>
-        <a href="#use-cases">Use cases</a>
-      </nav>
-      <div class="nav-actions">
-        <a class="nav-signin" href="/dashboard">Sign in</a>
-        <a class="btn btn-small" href="/dashboard">Get started <span>↗</span></a>
-      </div>
-    </header>
-
     <main id="top">
-      <!-- Cloud hero wrapper: canvas sits behind all content -->
+      <!-- Cloud hero wrapper: canvas covers nav + hero together -->
       <div class="cloud-hero-wrap">
         <canvas id="cloud-canvas" class="cloud-canvas" aria-hidden="true"></canvas>
+
+        <header class="nav" id="nav">
+          <a class="brand brand-image" href="#top" aria-label="ProspectIQ home">
+            <img src="assets/prospectiq-logo.png" alt="ProspectIQ — B2B lead intelligence" />
+          </a>
+          <nav class="nav-links" aria-label="Primary navigation">
+            <a href="#product">Product</a>
+            <a href="#workflow">How it works</a>
+            <a href="#intelligence">Intelligence</a>
+            <a href="#use-cases">Use cases</a>
+          </nav>
+          <div class="nav-actions">
+            <a class="nav-signin" href="/dashboard">Sign in</a>
+            <a class="btn btn-small" href="/dashboard">Get started <span>↗</span></a>
+          </div>
+        </header>
 
         <section class="hero container cloud-hero-inner">
           <div class="hero-copy reveal">
@@ -57,6 +57,7 @@
           </div>
         </section>
       </div>
+
 
       <section class="statement section-lg" id="product">
         <div class="container narrow reveal">

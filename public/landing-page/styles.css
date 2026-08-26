@@ -1121,8 +1121,11 @@ a{color:inherit;text-decoration:none}
   border:1px solid rgba(0,0,0,.06);
 }
 
-/* Nav: make it transparent on top of the cloud sky */
+/* Nav: transparent on the cloud sky, z-index above canvas */
 .nav{
+  position:sticky;
+  top:0;
+  z-index:20;          /* above canvas (z-index:0) */
   background:transparent !important;
   border-bottom-color:transparent !important;
   backdrop-filter:none !important;
@@ -1135,23 +1138,23 @@ a{color:inherit;text-decoration:none}
   backdrop-filter:blur(18px) !important;
   -webkit-backdrop-filter:blur(18px) !important;
 }
-/* Nav links white on cloud sky */
+/* Nav links — dark/black on cloud sky (user request) */
 .nav:not(.scrolled) .nav-links a,
 .nav:not(.scrolled) .nav-signin{
-  color:rgba(255,255,255,.90);
+  color:#152038;
 }
 .nav:not(.scrolled) .nav-links a:hover,
 .nav:not(.scrolled) .nav-signin:hover{
-  color:#fff;
+  color:#0071E3;
 }
-/* "Get started" button in nav — white pill on sky */
+/* "Get started" button in nav keeps its standard dark pill style */
 .nav:not(.scrolled) .btn.btn-small{
-  background:#fff !important;
-  color:#1a5fa8 !important;
-  border-color:#fff !important;
+  background:var(--ink) !important;
+  color:#fff !important;
+  border-color:var(--ink) !important;
 }
 .nav:not(.scrolled) .btn.btn-small:hover{
-  background:rgba(255,255,255,.90) !important;
+  background:#2B3752 !important;
 }
 
 @media(max-width:720px){
