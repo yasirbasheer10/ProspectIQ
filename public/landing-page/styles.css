@@ -1145,16 +1145,14 @@ a{color:inherit;text-decoration:none}
   max-width:980px;
   margin:0 auto;
   padding:8px 8px 8px 20px;
-  background:rgba(255,255,255,0.15);
-  backdrop-filter:blur(28px) saturate(120%) brightness(1.08);
-  -webkit-backdrop-filter:blur(28px) saturate(120%) brightness(1.08);
+  background:#ffffff;
   border-radius:100px;
-  border:1px solid rgba(255,255,255,0.45);
+  border:none;
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.55),  /* top rim highlight */
-    0 4px 24px rgba(15,30,70,0.08),
-    0 1px 4px rgba(15,30,70,0.06);
-  transition:box-shadow .3s ease, background .3s ease;
+    0 2px 8px rgba(15,30,70,0.10),
+    0 8px 32px rgba(15,30,70,0.12),
+    0 0 0 1px rgba(15,30,70,0.06);
+  transition:box-shadow .3s ease;
 }
 .nav-pill:hover{
   box-shadow:
