@@ -994,8 +994,8 @@ a{color:inherit;text-decoration:none}
 /* ─── Cloud Hero ──────────────────────────────────────────────────── */
 .cloud-hero-wrap{
   position:relative;
-  overflow:hidden;
-  /* tall enough to show sky + dashboard mockup */
+  /* Sky-blue fallback — prevents black flash before/after WebGL paints */
+  background:#7ab8e0;
   min-height:100vh;
   display:flex;
   flex-direction:column;
@@ -1016,7 +1016,7 @@ a{color:inherit;text-decoration:none}
 .cloud-hero-inner{
   position:relative;
   z-index:10;
-  padding-top:80px;
+  padding-top:40px;   /* reduced — eyebrow removed, text moves up */
   padding-bottom:72px;
 }
 
@@ -1121,24 +1121,27 @@ a{color:inherit;text-decoration:none}
   border:1px solid rgba(0,0,0,.06);
 }
 
-/* Nav: transparent on the cloud sky, z-index above canvas */
+/* Nav: frosted glass strip — sky visible through it */
 .nav{
   position:sticky;
   top:0;
-  z-index:20;          /* above canvas (z-index:0) */
-  background:transparent !important;
-  border-bottom-color:transparent !important;
-  backdrop-filter:none !important;
-  -webkit-backdrop-filter:none !important;
+  z-index:20;
+  background:rgba(255,255,255,0.18) !important;
+  border-bottom:1px solid rgba(255,255,255,0.30) !important;
+  backdrop-filter:blur(16px) saturate(160%) !important;
+  -webkit-backdrop-filter:blur(16px) saturate(160%) !important;
+  box-shadow:0 1px 0 rgba(255,255,255,0.15), 0 4px 20px rgba(15,30,70,0.08);
+  transition:background .3s ease, backdrop-filter .3s ease, border-color .3s ease, box-shadow .3s ease;
 }
-/* Once user scrolls, restore the solid nav background */
+/* Once user scrolls out of the cloud hero, snap to solid */
 .nav.scrolled{
   background:rgba(244,246,251,.97) !important;
   border-bottom-color:rgba(217,222,234,.75) !important;
   backdrop-filter:blur(18px) !important;
   -webkit-backdrop-filter:blur(18px) !important;
+  box-shadow:0 1px 0 rgba(217,222,234,.75) !important;
 }
-/* Nav links — dark/black on cloud sky (user request) */
+/* Nav links — dark/black on cloud sky */
 .nav:not(.scrolled) .nav-links a,
 .nav:not(.scrolled) .nav-signin{
   color:#152038;
@@ -1147,7 +1150,7 @@ a{color:inherit;text-decoration:none}
 .nav:not(.scrolled) .nav-signin:hover{
   color:#0071E3;
 }
-/* "Get started" button in nav keeps its standard dark pill style */
+/* "Get started" button — dark pill contrasts nicely on glass */
 .nav:not(.scrolled) .btn.btn-small{
   background:var(--ink) !important;
   color:#fff !important;
@@ -1158,5 +1161,5 @@ a{color:inherit;text-decoration:none}
 }
 
 @media(max-width:720px){
-  .cloud-hero-inner{padding-top:48px;padding-bottom:48px}
+  .cloud-hero-inner{padding-top:32px;padding-bottom:48px}
 }
