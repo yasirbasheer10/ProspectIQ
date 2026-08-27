@@ -1121,52 +1121,113 @@ a{color:inherit;text-decoration:none}
   border:1px solid rgba(0,0,0,.06);
 }
 
-/* Nav: 3D floating glass strip */
+/* Nav: transparent sticky wrapper — just provides the top padding and z-stacking */
 .nav{
   position:sticky;
   top:0;
   z-index:20;
-  /* Richer glass base — more visible against the sky */
-  background:rgba(255,255,255,0.30) !important;
-  border-top:1px solid rgba(255,255,255,0.80) !important;       /* bright top-edge highlight */
-  border-bottom:1px solid rgba(255,255,255,0.20) !important;
-  backdrop-filter:blur(20px) saturate(180%) brightness(1.05) !important;
-  -webkit-backdrop-filter:blur(20px) saturate(180%) brightness(1.05) !important;
-  /* Multi-layer shadow = depth beneath the strip */
+  width:100%;
+  padding:14px 24px;
+  background:transparent !important;
+  border:none !important;
+  box-shadow:none !important;
+  backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important;
+  height:auto !important;
+  display:block !important;
+}
+
+/* The actual pill ─────────────────────────────────── */
+.nav-pill{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  max-width:980px;
+  margin:0 auto;
+  padding:8px 8px 8px 20px;
+  background:#ffffff;
+  border-radius:100px;
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.70),   /* inner top shine */
-    0 4px 12px rgba(15,30,70,0.12),           /* close soft shadow */
-    0 12px 40px rgba(15,30,70,0.10),          /* wide diffuse shadow */
-    0 1px 0 rgba(255,255,255,0.30) !important; /* bottom rim */
-  transition:background .3s ease, box-shadow .3s ease, border-color .3s ease;
+    0 2px 8px rgba(15,30,70,0.10),
+    0 8px 32px rgba(15,30,70,0.12),
+    0 0 0 1px rgba(15,30,70,0.06);
+  transition:box-shadow .3s ease;
 }
-/* Once user scrolls out of the cloud hero, snap to solid */
+.nav-pill:hover{
+  box-shadow:
+    0 4px 16px rgba(15,30,70,0.14),
+    0 12px 40px rgba(15,30,70,0.14),
+    0 0 0 1px rgba(15,30,70,0.06);
+}
+
+/* Logo inside pill */
+.nav-pill-brand{
+  height:38px !important;
+  flex-shrink:0;
+}
+.nav-pill-brand img{
+  height:32px !important;
+  width:auto !important;
+  max-height:32px;
+  object-fit:contain;
+  object-position:left center;
+}
+
+/* Links inside pill */
+.nav-pill-links{
+  display:flex;
+  gap:28px;
+  font-size:14px;
+  font-weight:500;
+}
+.nav-pill-links a{
+  color:#152038 !important;
+  text-decoration:none;
+  transition:color .2s ease;
+}
+.nav-pill-links a:hover{
+  color:#0071E3 !important;
+}
+
+/* Dark pill button (right side) — matches reference */
+.nav-pill-btn{
+  display:inline-flex !important;
+  align-items:center;
+  gap:5px;
+  background:#152038 !important;
+  color:#ffffff !important;
+  font-size:14px !important;
+  font-weight:600 !important;
+  padding:10px 22px !important;
+  border-radius:100px !important;
+  border:none !important;
+  box-shadow:none !important;
+  text-decoration:none;
+  transition:background .2s ease, transform .15s ease;
+  white-space:nowrap;
+}
+.nav-pill-btn:hover{
+  background:#0F1730 !important;
+  transform:translateY(-1px);
+}
+
+/* Scrolled state — keep the pill, just add a subtle outer glow */
 .nav.scrolled{
-  background:rgba(244,246,251,.97) !important;
-  border-bottom-color:rgba(217,222,234,.75) !important;
-  backdrop-filter:blur(18px) !important;
-  -webkit-backdrop-filter:blur(18px) !important;
-  box-shadow:0 1px 0 rgba(217,222,234,.75) !important;
+  background:transparent !important;
+  border:none !important;
+  backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important;
+  box-shadow:none !important;
 }
-/* Nav links — dark/black on cloud sky */
-.nav:not(.scrolled) .nav-links a,
-.nav:not(.scrolled) .nav-signin{
-  color:#152038;
-}
-.nav:not(.scrolled) .nav-links a:hover,
-.nav:not(.scrolled) .nav-signin:hover{
-  color:#0071E3;
-}
-/* "Get started" button — dark pill contrasts nicely on glass */
-.nav:not(.scrolled) .btn.btn-small{
-  background:var(--ink) !important;
-  color:#fff !important;
-  border-color:var(--ink) !important;
-}
-.nav:not(.scrolled) .btn.btn-small:hover{
-  background:#2B3752 !important;
+.nav.scrolled .nav-pill{
+  box-shadow:
+    0 4px 20px rgba(15,30,70,0.16),
+    0 16px 48px rgba(15,30,70,0.14),
+    0 0 0 1px rgba(15,30,70,0.08);
 }
 
 @media(max-width:720px){
+  .nav-pill-links{ display:none }
+  .nav{ padding:10px 16px }
   .cloud-hero-inner{padding-top:32px;padding-bottom:48px}
 }
