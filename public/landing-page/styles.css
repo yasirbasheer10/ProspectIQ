@@ -1121,17 +1121,24 @@ a{color:inherit;text-decoration:none}
   border:1px solid rgba(0,0,0,.06);
 }
 
-/* Nav: frosted glass strip — sky visible through it */
+/* Nav: 3D floating glass strip */
 .nav{
   position:sticky;
   top:0;
   z-index:20;
-  background:rgba(255,255,255,0.18) !important;
-  border-bottom:1px solid rgba(255,255,255,0.30) !important;
-  backdrop-filter:blur(16px) saturate(160%) !important;
-  -webkit-backdrop-filter:blur(16px) saturate(160%) !important;
-  box-shadow:0 1px 0 rgba(255,255,255,0.15), 0 4px 20px rgba(15,30,70,0.08);
-  transition:background .3s ease, backdrop-filter .3s ease, border-color .3s ease, box-shadow .3s ease;
+  /* Richer glass base — more visible against the sky */
+  background:rgba(255,255,255,0.30) !important;
+  border-top:1px solid rgba(255,255,255,0.80) !important;       /* bright top-edge highlight */
+  border-bottom:1px solid rgba(255,255,255,0.20) !important;
+  backdrop-filter:blur(20px) saturate(180%) brightness(1.05) !important;
+  -webkit-backdrop-filter:blur(20px) saturate(180%) brightness(1.05) !important;
+  /* Multi-layer shadow = depth beneath the strip */
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.70),   /* inner top shine */
+    0 4px 12px rgba(15,30,70,0.12),           /* close soft shadow */
+    0 12px 40px rgba(15,30,70,0.10),          /* wide diffuse shadow */
+    0 1px 0 rgba(255,255,255,0.30) !important; /* bottom rim */
+  transition:background .3s ease, box-shadow .3s ease, border-color .3s ease;
 }
 /* Once user scrolls out of the cloud hero, snap to solid */
 .nav.scrolled{
